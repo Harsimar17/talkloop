@@ -77,10 +77,69 @@ function setKey(k) {
   }
 }
 
+// Each scene has a goal with several steps, so the learner has to do most of the talking
+// over many turns instead of finishing in two lines.
 const SCENARIOS = {
-  cafe: { character: "Inès", setting: "a barista at a busy neighbourhood café who loves recommending pastries" },
-  market: { character: "Tomás", setting: "a fruit seller at an outdoor market who haggles playfully" },
-  station: { character: "Yuki", setting: "a helpful ticket clerk at a train station during rush hour" },
+  cafe: {
+    character: "Inès",
+    setting: "a barista at a busy neighbourhood café who loves recommending pastries",
+    goal: "Take the learner's order: drink, size, milk, something to eat, here or to go, then payment. Chat a little while you prepare it.",
+  },
+  market: {
+    character: "Tomás",
+    setting: "a fruit seller at an outdoor market who haggles playfully",
+    goal: "Sell the learner fruit and vegetables for a dinner they're cooking. Ask what they're making, suggest things, discuss quantities and haggle over the price.",
+  },
+  station: {
+    character: "Yuki",
+    setting: "a helpful ticket clerk at a train station during rush hour",
+    goal: "Help the learner buy a ticket: destination, date and time, one-way or return, class, seat reservation, discount card, and which platform. Then tell them their train is delayed and help them choose an alternative.",
+  },
+  doctor: {
+    character: "Dr. Weber",
+    setting: "a friendly but thorough family doctor",
+    goal: "Find out what's wrong: ask about the symptoms, since when, how bad, fever, medication, allergies, work and sleep. Explain what you think it is, what to take and how often, and whether they need a sick note.",
+  },
+  flat: {
+    character: "Frau Schulz",
+    setting: "a landlady showing a flat to a possible new tenant",
+    goal: "Show the flat room by room and interview the learner: their job, income, why they're moving, pets, smoking, how long they'd stay, when they could move in. Let them ask about rent, deposit, heating and the neighbours.",
+  },
+  job: {
+    character: "Herr Brandt",
+    setting: "a recruiter interviewing the learner for a job at a mid-sized company",
+    goal: "Run a job interview: ask them to introduce themselves, their experience, strengths and weaknesses, a difficult situation they solved, why this job, salary expectations and start date. Then invite their questions.",
+  },
+  office: {
+    character: "Frau Yilmaz",
+    setting: "a clerk at the town hall registration office who is strict about paperwork",
+    goal: "Register the learner's new address: ask for ID, the landlord's confirmation, moving date, previous address, marital status and religion for tax. One document is missing; work out with them how to solve it.",
+  },
+  restaurant: {
+    character: "Luca",
+    setting: "a chatty waiter at a small family restaurant",
+    goal: "Seat the learner, explain the specials, take drinks and food orders with questions about preferences and allergies. Later there's a problem with the dish; handle the complaint, then dessert, the bill and splitting it.",
+  },
+  hotel: {
+    character: "Sophie",
+    setting: "a receptionist at a city hotel",
+    goal: "Check the learner in, but their booking can't be found. Sort it out together: name, dates, room type, how they booked. Then explain breakfast, Wi-Fi and checkout, and give tips for sightseeing.",
+  },
+  neighbour: {
+    character: "Jonas",
+    setting: "a friendly neighbour who has just moved in next door",
+    goal: "Get to know the learner on the stairs: where they're from, how long they've lived here, work, hobbies, tips for the area. Invite them to a small party and agree on day, time and what to bring.",
+  },
+  dentist: {
+    character: "Frau Klein",
+    setting: "a receptionist answering the phone at a busy dental practice",
+    goal: "Take an appointment request by phone: name and spelling, date of birth, insurance, what the problem is, how urgent. Offer times that don't fit at first and negotiate until one works, then confirm.",
+  },
+  shop: {
+    character: "Max",
+    setting: "a shop assistant in a clothing store",
+    goal: "The learner wants to return a jacket. Ask what's wrong, when they bought it, whether they have the receipt. Offer an exchange or a voucher instead of a refund and negotiate, then help them try something else.",
+  },
 };
 
 // A general partner used by the AI-led modes (not tied to a scene).
@@ -114,7 +173,7 @@ const MODES = {
     usesScene: true,
     endable: true,
     opener: "(The learner walks up. Greet them and open the scene.)",
-    extra: "Play out the scene naturally. Let it reach a natural end only after several exchanges, and only then set conversation_finished to true.",
+    extra: "Play out the scene naturally, one step at a time. Ask the learner questions so they do most of the talking, and ask follow-ups when an answer is short. Set conversation_finished to true only once every part of the scene goal is done, usually after ten or more exchanges.",
   },
 };
 
@@ -270,6 +329,7 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, t
     `The learner is a ${level} ${language} speaker whose native language is ${nativeLanguage}.`,
     "Keep each reply to one or two short sentences that match the learner's level, and end with something they can respond to.",
     m.extra,
+    ...(m.usesScene && persona.goal ? [`Scene goal: ${persona.goal}`] : []),
     "Speech recognition produced the learner's message, so ignore missing punctuation and obvious transcription slips.",
     `Write reply_translation, coach.tip and nothing else in ${nativeLanguage}.`,
     "Give a correction only when the learner made a real grammar or word-choice mistake.",
@@ -1054,10 +1114,10 @@ function setPaused(paused) {
 function enterCall() {
   const { request, characterName } = state.settings;
   const mode = MODES[request.mode] ?? MODES.scene;
-  $("call-avatar").textContent = characterName.charAt(0);
+  $("call-avatar").textContent = characterName.split(" ").at(-1).charAt(0); // "Dr. Weber" -> W
   $("call-name").textContent = characterName;
   $("call-mode").textContent = mode.usesScene
-    ? `${$("scenario").selectedOptions[0].textContent} · ${request.language}`
+    ? `${$("scenario").selectedOptions[0].textContent.split(" — ")[0]} · ${request.language}`
     : `${mode.label.split(" — ")[0]} · ${request.language}`;
   document.body.classList.add("in-call");
   $("conversation").hidden = false;
@@ -1185,7 +1245,6 @@ function renderBookmarks() {
 }
 
 // ---------- wiring ----------
-const CHARACTER_NAMES = { cafe: "Inès", market: "Tomás", station: "Yuki" };
 
 // Show the key box or the setup, depending on whether a key is already saved.
 function refreshKeyGate() {
@@ -1230,7 +1289,7 @@ $("start").addEventListener("click", async () => {
   state.settings = {
     locale: languageSelect.selectedOptions[0].dataset.locale,
     level: $("level").value,
-    characterName: usesScene ? CHARACTER_NAMES[scenario] : PARTNER.character,
+    characterName: usesScene ? (SCENARIOS[scenario] ?? SCENARIOS.cafe).character : PARTNER.character,
     vocab,
     request: {
       language: languageSelect.value,

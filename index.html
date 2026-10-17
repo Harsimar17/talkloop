@@ -75,9 +75,24 @@
         </label>
         <label>Scene
           <select id="scenario" disabled>
-            <option value="cafe">Café</option>
-            <option value="market">Market</option>
-            <option value="station">Train station</option>
+            <optgroup label="Everyday">
+              <option value="cafe">Café — order a coffee</option>
+              <option value="market">Market — shop and haggle</option>
+              <option value="restaurant">Restaurant — order and complain</option>
+              <option value="shop">Clothes shop — return a jacket</option>
+              <option value="neighbour">New neighbour — small talk</option>
+            </optgroup>
+            <optgroup label="Travel">
+              <option value="station">Train station — tickets and delays</option>
+              <option value="hotel">Hotel — lost booking</option>
+            </optgroup>
+            <optgroup label="Life admin">
+              <option value="doctor">Doctor — describe symptoms</option>
+              <option value="dentist">Dentist — book by phone</option>
+              <option value="flat">Flat viewing — meet the landlady</option>
+              <option value="office">Town hall — register your address</option>
+              <option value="job">Job interview</option>
+            </optgroup>
           </select>
         </label>
       </div>
