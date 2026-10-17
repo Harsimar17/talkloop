@@ -7,7 +7,7 @@ static site (e.g. GitHub Pages).
 
 ## Use it
 
-1. Open the page.
+1. Open the page(https://harsimar17.github.io/talkloop/).
 2. Paste a **Gemini API key** (free from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
    The key is stored only in your browser (`localStorage`) and is sent only to Google.
 3. Pick a language, level and scene, and start talking.
