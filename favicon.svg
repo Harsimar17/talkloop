@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Talkloop">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3f7bea"/>
+      <stop offset="1" stop-color="#2f5fd0"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
+  <!-- speech bubble -->
+  <path d="M16 15h32a6 6 0 0 1 6 6v16a6 6 0 0 1-6 6H30l-10 8v-8h-4a6 6 0 0 1-6-6V21a6 6 0 0 1 6-6z" fill="#ffffff"/>
+  <!-- loop arrow inside the bubble -->
+  <path d="M25 29a8 8 0 1 1 1.6 9.8" fill="none" stroke="#2f5fd0" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M24.5 23.5l1 5.6-5.6-1z" fill="#2f5fd0"/>
+</svg>
