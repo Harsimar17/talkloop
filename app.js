@@ -396,6 +396,7 @@ function startListening() {
     return;
   }
   stopSpeaking();
+  setAudioSession("auto");
   recognizer = new Recognition();
   recognizer.lang = state.settings.locale;
   recognizer.interimResults = true;
@@ -514,9 +515,30 @@ function getAudioCtx() {
   return audioCtx;
 }
 
+// One shared <audio> element. On iPhone, speech recognition takes over the audio
+// session and suspends Web Audio; an element primed inside a tap can still play then.
+const player = new Audio();
+player.setAttribute("playsinline", "");
+let playerPrimed = false;
+
+// iOS 17+: route speech like media (plays with the ring switch on silent).
+// Listening switches it back to "auto" so the mic still works.
+function setAudioSession(type) {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = type;
+  } catch {
+    // unsupported value or browser; the default session still works
+  }
+}
+
 // Runs inside every user gesture so Safari lets audio play later, after network waits.
 let speechPrimed = false;
 function unlockAudio() {
+  if (!playerPrimed) {
+    playerPrimed = true;
+    player.src = pcmToWavUrl(new Uint8Array(480)); // 10 ms of silence
+    player.play().catch(() => { playerPrimed = false; });
+  }
   const ctx = getAudioCtx();
   if (ctx && ctx.state !== "running") {
     ctx.resume().catch(() => {});
@@ -552,8 +574,11 @@ async function speak(text, wordSpans, onDone) {
   const fallback = (reason) => {
     if (token !== speakToken) return;
     console.warn("Gemini voice unavailable, using the browser voice:", reason);
+    noteVoice(wordSpans, `Browser voice — ${reason}`);
     browserSpeak(text, rate, wordSpans, finish);
   };
+  noteVoice(wordSpans, "");
+  setAudioSession("playback");
   let tts;
   try {
     tts = await geminiTts(text);
@@ -584,8 +609,12 @@ async function playCloudAudio(pcm, sampleRate, wordSpans, onDone, onFail) {
   if (ctx.state !== "running") {
     await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 300))]);
     if (token !== speakToken) return;
-    // A still-suspended context would play silently and never end; use the browser voice.
-    if (ctx.state !== "running") return onFail("audio is locked until you tap the page");
+    // A still-suspended context (iPhone after the mic was used) would play silently
+    // and never end; try the primed <audio> element instead.
+    if (ctx.state !== "running") {
+      playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail);
+      return;
+    }
   }
 
   // 16-bit little-endian mono PCM -> AudioBuffer.
@@ -615,10 +644,12 @@ async function playCloudAudio(pcm, sampleRate, wordSpans, onDone, onFail) {
   }
 }
 
-// Fallback for the rare browser without Web Audio.
+// Plays through the shared <audio> element, for browsers without Web Audio or
+// when the AudioContext is suspended.
 function playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail) {
   const url = pcmToWavUrl(pcm, sampleRate);
-  const audio = new Audio(url);
+  const audio = player;
+  audio.src = url;
   currentAudio = audio;
   audio.ontimeupdate = () => {
     if (!audio.duration || !wordSpans.length) return;
@@ -673,7 +704,7 @@ function stopSpeaking() {
     currentSource = null;
   }
   if (currentAudio) {
-    currentAudio.onended = currentAudio.onerror = null;
+    currentAudio.onended = currentAudio.onerror = currentAudio.ontimeupdate = null;
     currentAudio.pause();
     currentAudio = null;
   }
@@ -814,6 +845,23 @@ function renderFocusWords(words) {
     chip.title = w.en;
     box.append(chip);
   }
+}
+
+// Small note under a message saying the browser voice played, and why (empty clears it).
+function noteVoice(wordSpans, text) {
+  const li = wordSpans[0]?.closest("li");
+  if (!li) return;
+  let note = li.querySelector(".voice-note");
+  if (!text) {
+    note?.remove();
+    return;
+  }
+  if (!note) {
+    note = document.createElement("div");
+    note.className = "voice-note";
+    li.append(note);
+  }
+  note.textContent = text;
 }
 
 function setStatus(text) {
