@@ -11,6 +11,7 @@ const state = {
   finished: false,
   handsFree: false, // when true, the mic listens, auto-sends on a pause, and resumes after each reply
   speaking: false,
+  paused: false, // call on hold: no voice, no mic, timer stopped
 };
 
 const SILENCE_MS = 2500; // how long a pause ends your turn in hands-free mode
@@ -454,7 +455,9 @@ function startListening() {
     setMic(false);
     $("live").textContent = "";
     const spoken = finalText.trim();
-    if (spoken) {
+    if (state.paused) {
+      // Paused mid-sentence: drop it rather than sending half a thought.
+    } else if (spoken) {
       // Hands-free: send straight away. Listening resumes after the reply is spoken.
       sendTurn(spoken);
     } else if (state.handsFree) {
@@ -845,12 +848,17 @@ function addCharacterMessage(turn) {
   li.append(who, line, translation, tools);
   $("transcript").append(li);
   scrollCallToBottom();
+  // A reply that arrives while the call is paused is spoken on resume.
+  if (state.paused) {
+    pendingReply = { text: turn.reply, spans };
+    return;
+  }
   // When hands-free, start listening again once the character finishes speaking.
   speak(turn.reply, spans, () => maybeResumeListening());
 }
 
 function maybeResumeListening() {
-  if (state.handsFree && !state.finished && !recognizer) {
+  if (state.handsFree && !state.finished && !state.paused && !recognizer) {
     startListening();
   }
 }
@@ -954,7 +962,7 @@ function setStatus(text) {
 
 function setBusy(busy) {
   state.busy = busy;
-  for (const el of $("composer").querySelectorAll("button, input")) el.disabled = busy || state.finished;
+  for (const el of $("composer").querySelectorAll("button, input")) el.disabled = busy || state.finished || state.paused;
   updateCallState();
 }
 
@@ -974,6 +982,7 @@ function updateCallState() {
   let key = "idle";
   let text = state.handsFree ? "Your turn — just talk" : "Your turn";
   if (state.finished) { key = "ended"; text = "Scene complete"; }
+  else if (state.paused) { key = "paused"; text = "Paused"; }
   else if (state.busy) { key = "thinking"; text = "Thinking…"; }
   else if (state.speaking) { key = "speaking"; text = "Speaking…"; }
   else if (recognizer) { key = "listening"; text = "Listening…"; }
@@ -981,18 +990,65 @@ function updateCallState() {
   $("call-state").textContent = text;
 }
 
+// Call timer; time spent paused doesn't count.
 let callTimer = null;
-function startCallTimer() {
-  const started = Date.now();
-  const tick = () => {
-    const s = Math.floor((Date.now() - started) / 1000);
-    const hh = Math.floor(s / 3600);
-    const mmss = `${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-    $("call-timer").textContent = hh ? `${hh}:${mmss}` : mmss;
-  };
+let callElapsed = 0; // ms counted before the current running stretch
+let callRunningSince = 0;
+function tickCallTimer() {
+  const ms = callElapsed + (callTimer ? Date.now() - callRunningSince : 0);
+  const s = Math.floor(ms / 1000);
+  const hh = Math.floor(s / 3600);
+  const mmss = `${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  $("call-timer").textContent = hh ? `${hh}:${mmss}` : mmss;
+}
+function runCallTimer() {
+  if (callTimer) return;
+  callRunningSince = Date.now();
+  callTimer = setInterval(tickCallTimer, 1000);
+  tickCallTimer();
+}
+function holdCallTimer() {
+  if (!callTimer) return;
+  callElapsed += Date.now() - callRunningSince;
   clearInterval(callTimer);
-  tick();
-  callTimer = setInterval(tick, 1000);
+  callTimer = null;
+  tickCallTimer();
+}
+function startCallTimer() {
+  holdCallTimer();
+  callElapsed = 0;
+  runCallTimer();
+}
+
+// Pause = put the call on hold: stop the voice and the mic, freeze the timer.
+let pendingReply = null; // a reply that arrived while paused, spoken on resume
+let resumeHandsFree = false;
+function setPaused(paused) {
+  if (paused === state.paused) return;
+  if (paused) {
+    resumeHandsFree = state.handsFree;
+    state.paused = true; // set first so nothing restarts the mic or voice
+    if (recognizer) stopListening();
+    state.handsFree = false;
+    stopSpeaking();
+    holdCallTimer();
+    setStatus("Call paused. Tap Resume to carry on.");
+  } else {
+    state.paused = false;
+    runCallTimer();
+    setStatus("");
+    state.handsFree = resumeHandsFree;
+    const reply = pendingReply;
+    pendingReply = null;
+    if (reply) speak(reply.text, reply.spans, () => maybeResumeListening());
+    else maybeResumeListening();
+  }
+  const btn = $("pause");
+  btn.setAttribute("aria-pressed", String(paused));
+  btn.title = paused ? "Resume the call" : "Pause the call";
+  btn.querySelector(".round-label").textContent = paused ? "Resume" : "Pause";
+  $("mic").disabled = paused;
+  setBusy(state.busy);
 }
 
 function enterCall() {
@@ -1047,7 +1103,7 @@ async function sendTurn(message) {
       renderSuggestions([]);
       state.handsFree = false;
       setStatus("Scene complete! Tap End to start another.");
-    } else {
+    } else if (!state.paused) {
       setStatus("");
     }
   } catch (error) {
@@ -1260,6 +1316,8 @@ $("mic").addEventListener("click", () => {
   }
 });
 
+$("pause").addEventListener("click", () => setPaused(!state.paused));
+
 $("explorer-close").addEventListener("click", () => {
   $("explorer").hidden = true;
 });
@@ -1272,6 +1330,9 @@ $("end").addEventListener("click", () => {
   state.rapport = 0;
   state.finished = false;
   state.handsFree = false;
+  pendingReply = null;
+  resumeHandsFree = false;
+  setPaused(false);
   $("transcript").replaceChildren();
   $("coach").hidden = true;
   $("suggestions").replaceChildren();

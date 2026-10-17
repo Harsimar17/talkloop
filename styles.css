@@ -171,7 +171,7 @@ body.in-call { overflow: hidden; }
 .call-dock .focus { margin: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .call-dock .focus-word { white-space: nowrap; }
 
-.call-controls { display: flex; justify-content: center; gap: 48px; padding-top: 4px; }
+.call-controls { display: flex; justify-content: center; gap: 40px; padding-top: 4px; }
 .round {
   display: flex;
   flex-direction: column;
@@ -198,6 +198,12 @@ body.in-call { overflow: hidden; }
 .round:active svg { transform: scale(0.94); }
 .mic[aria-pressed="true"] svg { background: var(--warn); border-color: transparent; color: #fff; }
 .end svg { background: #e0393e; border-color: transparent; color: #fff; }
+.pause .icon-play, .pause[aria-pressed="true"] .icon-pause { display: none; }
+.pause[aria-pressed="true"] .icon-play { display: inline; }
+.pause[aria-pressed="true"] svg { background: var(--text); border-color: transparent; color: var(--bg); }
+.round:disabled { opacity: 0.4; }
+.call[data-state="paused"] .call-state { color: var(--text); border-color: currentColor; }
+.call[data-state="paused"] .call-scroll { opacity: 0.6; }
 
 .explorer { position: fixed; right: 16px; bottom: 16px; width: min(360px, calc(100% - 32px)); box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); z-index: 3; }
 .close { position: absolute; top: 8px; right: 8px; padding: 0 8px; }
