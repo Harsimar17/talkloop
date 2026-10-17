@@ -1,0 +1,10 @@
+node_modules/
+.DS_Store
+*.log
+.env
+# never commit a key
+secrets.*
+
+# local-only
+docs/
+.vscode/

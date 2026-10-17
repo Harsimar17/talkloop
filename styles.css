@@ -1,0 +1,135 @@
+:root {
+  --bg: #f6f4ef;
+  --surface: #ffffff;
+  --text: #1d1b16;
+  --muted: #6b665c;
+  --accent: #2f6fde;
+  --accent-text: #ffffff;
+  --character: #eef3fc;
+  --learner: #fff4dc;
+  --good: #1f8a4c;
+  --warn: #b5541a;
+  --border: #e3dfd5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171b;
+    --surface: #1f2227;
+    --text: #ecebe7;
+    --muted: #a19d94;
+    --accent: #6b9cff;
+    --accent-text: #0d1220;
+    --character: #22304a;
+    --learner: #3a3220;
+    --good: #5fd08f;
+    --warn: #f09a5f;
+    --border: #33373e;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0 auto;
+  max-width: 720px;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, sans-serif;
+}
+
+h1 { font-size: 1.4rem; margin: 0; }
+h2 { font-size: 1.05rem; margin: 0 0 12px; }
+
+.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.stats { display: flex; gap: 12px; font-weight: 600; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; color: var(--muted); }
+select, input {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 10px 14px; min-height: 44px; -webkit-tap-highlight-color: transparent; }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+button:disabled { opacity: 0.5; cursor: progress; }
+select, input { min-height: 44px; } /* comfortable touch targets; 16px font avoids iOS zoom */
+
+#transcript { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 10px; }
+.msg { padding: 10px 14px; border-radius: 12px; max-width: 85%; }
+.msg.character { background: var(--character); align-self: flex-start; }
+.msg.learner { background: var(--learner); align-self: flex-end; }
+.msg .who { font-size: 0.75rem; color: var(--muted); display: block; }
+.msg .translation { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
+.msg .tools { display: flex; gap: 8px; margin-top: 6px; }
+.msg .tools button { padding: 2px 8px; font-size: 0.8rem; }
+
+.word { cursor: pointer; border-radius: 4px; }
+.word:hover { text-decoration: underline; }
+.word.speaking { background: var(--accent); color: var(--accent-text); }
+
+.coach { border-left: 4px solid var(--good); }
+.coach.has-correction { border-left-color: var(--warn); }
+.coach p { margin: 4px 0; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.chips button { border-radius: 999px; font-size: 0.9rem; }
+
+.live { min-height: 1.5em; color: var(--muted); font-style: italic; margin-bottom: 8px; }
+
+.composer { display: flex; gap: 8px; }
+.composer input { flex: 1; min-width: 0; }
+.mic { font-size: 1.2rem; }
+.mic[aria-pressed="true"] { background: var(--warn); color: var(--accent-text); }
+
+.status { color: var(--muted); font-size: 0.85rem; min-height: 1.2em; }
+
+.explorer { position: fixed; right: 16px; bottom: 16px; width: min(360px, calc(100% - 32px)); box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); z-index: 2; }
+.close { position: absolute; top: 8px; right: 8px; padding: 0 8px; }
+
+.bookmarks { margin: 0; padding-left: 18px; }
+.bookmarks li { margin-bottom: 4px; }
+.bookmarks .muted { color: var(--muted); }
+
+.muted { color: var(--muted); }
+.muted a { color: var(--accent); }
+.keyline { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; font-size: 0.85rem; }
+.convbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.convbar button { font-size: 0.85rem; padding: 6px 10px; min-height: 36px; }
+
+/* Phones */
+@media (max-width: 560px) {
+  body { padding: 12px; }
+  .topbar { flex-wrap: wrap; gap: 6px; }
+  h1 { font-size: 1.2rem; }
+  .card { padding: 12px; border-radius: 10px; }
+  .grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .msg { max-width: 92%; }
+  .mic { font-size: 1.4rem; min-width: 52px; } /* easy thumb target */
+  .chips button { font-size: 1rem; }
+  /* Word explorer becomes a bottom sheet so it never covers the composer awkwardly */
+  .explorer {
+    left: 0; right: 0; bottom: 0; width: 100%;
+    border-radius: 14px 14px 0 0;
+    max-height: 70vh; overflow-y: auto;
+  }
+}
+
+/* Keep the composer reachable above the phone's bottom edge */
+@supports (padding: max(0px)) {
+  .composer { padding-bottom: env(safe-area-inset-bottom); }
+}

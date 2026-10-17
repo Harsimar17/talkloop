@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Talkloop</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Talkloop</h1>
+      <div class="stats">
+        <span id="streak" title="Days in a row you practised">🔥 0</span>
+        <span id="rapport" title="How much the character likes chatting with you">♥ 0</span>
+      </div>
+    </header>
+
+    <section id="keygate" class="card" hidden>
+      <h2>Add your Gemini API key</h2>
+      <p class="muted">
+        Talkloop runs entirely in your browser and talks to Google Gemini with your own key.
+        Get a free key at
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
+        Your key is stored only in this browser — it is never sent anywhere except Google.
+      </p>
+      <label>Gemini API key
+        <input id="api-key" type="password" autocomplete="off" placeholder="Paste your key (AIza… or AQ.…)" />
+      </label>
+      <button id="save-key" class="primary">Save key</button>
+      <p id="key-status" class="status"></p>
+    </section>
+
+    <section id="setup" class="card" hidden>
+      <div id="key-saved" class="keyline" hidden>
+        <span class="muted">✓ Gemini key saved in this browser.</span>
+        <button id="change-key" type="button">Change key</button>
+      </div>
+      <h2>Start a conversation</h2>
+      <div class="grid">
+        <label>Practise
+          <select id="language">
+            <option value="Spanish" data-locale="es-ES">Spanish</option>
+            <option value="French" data-locale="fr-FR">French</option>
+            <option value="German" data-locale="de-DE" selected>German</option>
+            <option value="Italian" data-locale="it-IT">Italian</option>
+            <option value="Japanese" data-locale="ja-JP">Japanese</option>
+            <option value="Portuguese" data-locale="pt-BR">Portuguese</option>
+          </select>
+        </label>
+        <label>I speak
+          <select id="native">
+            <option>English</option>
+            <option>Hindi</option>
+            <option>Punjabi</option>
+            <option>Spanish</option>
+          </select>
+        </label>
+        <label>Level
+          <select id="level">
+            <option value="beginner">Beginner</option>
+            <option value="intermediate">Intermediate</option>
+            <option value="advanced">Advanced</option>
+          </select>
+        </label>
+        <label>Mode
+          <select id="mode">
+            <option value="lead">Free chat — partner leads</option>
+            <option value="interview">Interview me</option>
+            <option value="topic">Discuss a topic</option>
+            <option value="scene">Scene role-play</option>
+          </select>
+        </label>
+        <label>Scene
+          <select id="scenario" disabled>
+            <option value="cafe">Café</option>
+            <option value="market">Market</option>
+            <option value="station">Train station</option>
+          </select>
+        </label>
+      </div>
+      <button id="start" class="primary">Start</button>
+    </section>
+
+    <main id="conversation" hidden>
+      <div class="convbar">
+        <button type="button" id="end">⏹ End conversation</button>
+      </div>
+      <ol id="transcript" aria-live="polite"></ol>
+
+      <div id="coach" class="card coach" hidden></div>
+
+      <div id="suggestions" class="chips" aria-label="Things you could say"></div>
+
+      <div id="live" class="live" aria-live="polite"></div>
+
+      <form id="composer" class="composer">
+        <button type="button" id="mic" class="mic" aria-pressed="false" title="Hold a conversation by voice">🎙</button>
+        <input id="text" autocomplete="off" placeholder="Speak, or type your reply…" />
+        <button class="primary" type="submit">Send</button>
+      </form>
+      <p id="status" class="status"></p>
+    </main>
+
+    <aside id="explorer" class="card explorer" hidden>
+      <button id="explorer-close" class="close" aria-label="Close">×</button>
+      <div id="explorer-body"></div>
+    </aside>
+
+    <section class="card">
+      <h2>Saved words</h2>
+      <ul id="bookmarks" class="bookmarks"></ul>
+    </section>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
