@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Talkloop</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="favicon.svg" />
@@ -111,26 +111,43 @@
       <button id="start" class="primary">Start</button>
     </section>
 
-    <main id="conversation" hidden>
-      <div class="convbar">
-        <button type="button" id="end">⏹ End conversation</button>
+    <!-- Full-screen "phone call" while a conversation runs: caller header on top,
+         scrolling transcript in the middle, call controls pinned to the bottom. -->
+    <main id="conversation" class="call" hidden>
+      <header class="call-head">
+        <div id="call-avatar" class="avatar" aria-hidden="true"></div>
+        <div class="caller">
+          <div id="call-name" class="caller-name"></div>
+          <div class="caller-sub"><span id="call-mode"></span> · <span id="call-timer">00:00</span></div>
+        </div>
+        <div id="call-state" class="call-state">Connecting…</div>
+      </header>
+
+      <div id="call-scroll" class="call-scroll">
+        <ol id="transcript" aria-live="polite"></ol>
+        <div id="coach" class="card coach" hidden></div>
       </div>
-      <ol id="transcript" aria-live="polite"></ol>
 
-      <div id="coach" class="card coach" hidden></div>
-
-      <div id="focus" class="focus" hidden aria-label="Vocabulary being practised"></div>
-
-      <div id="suggestions" class="chips" aria-label="Things you could say"></div>
-
-      <div id="live" class="live" aria-live="polite"></div>
-
-      <form id="composer" class="composer">
-        <button type="button" id="mic" class="mic" aria-pressed="false" title="Hold a conversation by voice">🎙</button>
-        <input id="text" autocomplete="off" placeholder="Speak, or type your reply…" />
-        <button class="primary" type="submit">Send</button>
-      </form>
-      <p id="status" class="status"></p>
+      <footer class="call-dock">
+        <div id="focus" class="focus" hidden aria-label="Vocabulary being practised"></div>
+        <div id="suggestions" class="chips" aria-label="Things you could say"></div>
+        <div id="live" class="live" aria-live="polite"></div>
+        <p id="status" class="status"></p>
+        <form id="composer" class="composer">
+          <input id="text" autocomplete="off" placeholder="Type your reply…" />
+          <button class="primary" type="submit">Send</button>
+        </form>
+        <div class="call-controls">
+          <button type="button" id="mic" class="round mic" aria-pressed="false" title="Talk hands-free">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg>
+            <span class="round-label">Talk</span>
+          </button>
+          <button type="button" id="end" class="round end" title="End the conversation">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85a.98.98 0 0 1-1.38-.01L.29 13.08a1 1 0 0 1 0-1.41C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67a1 1 0 0 1 0 1.41l-2.51 2.48a.98.98 0 0 1-1.38.01 11.3 11.3 0 0 0-2.66-1.85 1 1 0 0 1-.56-.9v-3.1A15 15 0 0 0 12 9Z"/></svg>
+            <span class="round-label">End</span>
+          </button>
+        </div>
+      </footer>
     </main>
 
     <aside id="explorer" class="card explorer" hidden>

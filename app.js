@@ -10,6 +10,7 @@ const state = {
   busy: false,
   finished: false,
   handsFree: false, // when true, the mic listens, auto-sends on a pause, and resumes after each reply
+  speaking: false,
 };
 
 const SILENCE_MS = 2500; // how long a pause ends your turn in hands-free mode
@@ -472,10 +473,13 @@ function stopListening() {
   state.handsFree = false;
   recognizer?.stop();
   setStatus("Hands-free off.");
+  updateCallState();
 }
 
 function setMic(on) {
   $("mic").setAttribute("aria-pressed", String(on));
+  $("mic").querySelector(".round-label").textContent = on ? "Listening" : "Talk";
+  updateCallState();
 }
 
 // ---------- speech synthesis with word highlighting ----------
@@ -611,17 +615,20 @@ async function speak(text, wordSpans, onDone) {
   const finish = () => {
     if (done) return;
     done = true;
+    if (token === speakToken) setSpeaking(false);
     if (typeof onDone === "function") onDone();
   };
   const fallback = (reason) => {
     if (token !== speakToken) return;
     console.warn("Natural voice unavailable, using the browser voice:", reason);
     noteVoice(wordSpans, `Browser voice — ${reason}`);
+    setSpeaking(true);
     browserSpeak(text, rate, wordSpans, finish);
   };
   const play = (audio, note) => {
     if (token !== speakToken) return; // stopped or superseded while audio was generating
     noteVoice(wordSpans, note);
+    setSpeaking(true);
     playCloudAudio(audio.pcm, audio.sampleRate, wordSpans, finish, fallback);
   };
   noteVoice(wordSpans, "");
@@ -772,6 +779,7 @@ async function browserSpeak(text, rate, wordSpans, onDone) {
 
 function stopSpeaking() {
   speakToken++;
+  setSpeaking(false);
   if (currentHighlight) { clearInterval(currentHighlight); currentHighlight = null; }
   document.querySelectorAll(".word.speaking").forEach((span) => span.classList.remove("speaking"));
   if (currentSource) {
@@ -836,7 +844,7 @@ function addCharacterMessage(turn) {
 
   li.append(who, line, translation, tools);
   $("transcript").append(li);
-  li.scrollIntoView({ behavior: "smooth", block: "end" });
+  scrollCallToBottom();
   // When hands-free, start listening again once the character finishes speaking.
   speak(turn.reply, spans, () => maybeResumeListening());
 }
@@ -855,6 +863,7 @@ function addLearnerMessage(text) {
   who.textContent = "You";
   li.append(who, document.createTextNode(text));
   $("transcript").append(li);
+  scrollCallToBottom();
 }
 
 function renderCoach(coach) {
@@ -946,6 +955,72 @@ function setStatus(text) {
 function setBusy(busy) {
   state.busy = busy;
   for (const el of $("composer").querySelectorAll("button, input")) el.disabled = busy || state.finished;
+  updateCallState();
+}
+
+// ---------- call screen ----------
+function scrollCallToBottom() {
+  const box = $("call-scroll");
+  requestAnimationFrame(() => box.scrollTo({ top: box.scrollHeight, behavior: "smooth" }));
+}
+
+function setSpeaking(on) {
+  state.speaking = on;
+  updateCallState();
+}
+
+// The pill in the call header: what's happening right now.
+function updateCallState() {
+  let key = "idle";
+  let text = state.handsFree ? "Your turn — just talk" : "Your turn";
+  if (state.finished) { key = "ended"; text = "Scene complete"; }
+  else if (state.busy) { key = "thinking"; text = "Thinking…"; }
+  else if (state.speaking) { key = "speaking"; text = "Speaking…"; }
+  else if (recognizer) { key = "listening"; text = "Listening…"; }
+  $("conversation").dataset.state = key;
+  $("call-state").textContent = text;
+}
+
+let callTimer = null;
+function startCallTimer() {
+  const started = Date.now();
+  const tick = () => {
+    const s = Math.floor((Date.now() - started) / 1000);
+    const hh = Math.floor(s / 3600);
+    const mmss = `${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+    $("call-timer").textContent = hh ? `${hh}:${mmss}` : mmss;
+  };
+  clearInterval(callTimer);
+  tick();
+  callTimer = setInterval(tick, 1000);
+}
+
+function enterCall() {
+  const { request, characterName } = state.settings;
+  const mode = MODES[request.mode] ?? MODES.scene;
+  $("call-avatar").textContent = characterName.charAt(0);
+  $("call-name").textContent = characterName;
+  $("call-mode").textContent = mode.usesScene
+    ? `${$("scenario").selectedOptions[0].textContent} · ${request.language}`
+    : `${mode.label.split(" — ")[0]} · ${request.language}`;
+  document.body.classList.add("in-call");
+  $("conversation").hidden = false;
+  startCallTimer();
+  updateCallState();
+}
+
+function leaveCall() {
+  clearInterval(callTimer);
+  callTimer = null;
+  document.body.classList.remove("in-call");
+  $("conversation").hidden = true;
+}
+
+// Keep the call screen sized to the visible area when the phone keyboard opens.
+if (window.visualViewport) {
+  const fit = () => document.documentElement.style.setProperty("--vvh", `${window.visualViewport.height}px`);
+  window.visualViewport.addEventListener("resize", fit);
+  fit();
 }
 
 // ---------- conversation turns ----------
@@ -970,7 +1045,8 @@ async function sendTurn(message) {
     if (turn.conversation_finished) {
       state.finished = true;
       renderSuggestions([]);
-      setStatus("Scene complete! Refresh to start another.");
+      state.handsFree = false;
+      setStatus("Scene complete! Tap End to start another.");
     } else {
       setStatus("");
     }
@@ -1111,7 +1187,7 @@ $("start").addEventListener("click", async () => {
   bumpStreak();
   renderStats();
   $("setup").hidden = true;
-  $("conversation").hidden = false;
+  enterCall();
   // Gemini voice is used up for today: get the on-device voice ready while the first reply loads.
   if (geminiTtsBlocked() && hasPiperVoice(state.settings.locale)) {
     preloadPiper(state.settings.locale).catch((error) => console.warn("Piper download failed:", error));
@@ -1203,7 +1279,9 @@ $("end").addEventListener("click", () => {
   $("text").value = "";
   setStatus("");
   renderStats();
-  $("conversation").hidden = true;
+  renderFocusWords([]);
+  setBusy(false);
+  leaveCall();
   $("setup").hidden = false;
 });
 
