@@ -54,7 +54,10 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
-label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; color: var(--muted); }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; color: var(--muted); min-width: 0; }
+/* A select is as wide as its longest option by default; long scene names would push it off screen. */
+.grid select { width: 100%; min-width: 0; text-overflow: ellipsis; }
+.grid label:has(#scenario) { grid-column: 1 / -1; } /* scene names are long: give them the full row */
 select, input {
   font: inherit;
   color: var(--text);
@@ -222,7 +225,7 @@ body.in-call { overflow: hidden; }
 .vocab-url-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .vocab-url-row input { flex: 1; min-width: 0; font-size: 0.85rem; }
 .vocab-url-row button { white-space: nowrap; font-size: 0.9rem; }
-.check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--text); }
+.check { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--text); }
 .check input { min-height: auto; width: auto; }
 .vocab-levels { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
 
@@ -236,7 +239,7 @@ body.in-call { overflow: hidden; }
   .topbar { flex-wrap: wrap; gap: 6px; }
   h1 { font-size: 1.2rem; }
   .card { padding: 12px; border-radius: 10px; }
-  .grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
   .msg { max-width: 92%; }
   .call-scroll { padding: 12px; }
   .call-dock { padding-left: 12px; padding-right: 12px; }
