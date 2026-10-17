@@ -1,4 +1,6 @@
 // Talkloop client: speech in, AI character turn out, spoken back with word highlighting.
+import { hasPiperVoice, piperReady, loadPiperVoice, piperSpeak } from "./piper.js";
+
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -364,6 +366,22 @@ function pcmToWavUrl(pcm, sampleRate = 24000) {
   return URL.createObjectURL(blob);
 }
 
+// The free tier allows only a few TTS requests a day. After a quota error, skip
+// Gemini voice until the reset time it reports (e.g. "Please retry in 9h58m15.8s").
+function blockGeminiTts(message) {
+  const m = /retry in ((?:\d+h)?(?:\d+m)?(?:[\d.]+s)?)/i.exec(message);
+  let ms = 60 * 60 * 1000; // no reset time given: try again in an hour
+  if (m && m[1]) {
+    const part = (unit) => Number(new RegExp(`([\\d.]+)${unit}`).exec(m[1])?.[1] ?? 0);
+    ms = ((part("h") * 60 + part("m")) * 60 + part("s")) * 1000 || ms;
+  }
+  store.set("tts_blocked_until", Date.now() + ms);
+}
+
+function geminiTtsBlocked() {
+  return Date.now() < store.get("tts_blocked_until", 0);
+}
+
 async function geminiTts(text) {
   const key = getKey();
   if (!key) return null;
@@ -379,7 +397,10 @@ async function geminiTts(text) {
     }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error?.message ?? `TTS request failed (${res.status})`);
+  if (!res.ok) {
+    if (res.status === 429) blockGeminiTts(data.error?.message ?? "");
+    throw new Error(data.error?.message ?? `TTS request failed (${res.status})`);
+  }
   const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
   if (!part) throw new Error("TTS returned no audio");
   const rate = /rate=(\d+)/.exec(part.inlineData.mimeType ?? "");
@@ -558,11 +579,32 @@ for (const type of ["click", "touchend", "keydown"]) {
   document.addEventListener(type, unlockAudio, { capture: true });
 }
 
-// Speak with the native-sounding cloud voice; fall back to the browser voice
-// if the cloud TTS is unavailable or the browser won't play it.
+// Generated audio by text, so Replay and Listen don't spend another TTS request.
+const ttsCache = new Map();
+const TTS_CACHE_MAX = 60;
+function rememberTts(text, audio) {
+  ttsCache.set(text, audio);
+  if (ttsCache.size > TTS_CACHE_MAX) ttsCache.delete(ttsCache.keys().next().value);
+}
+
+// Start downloading the open-source voice in the background, showing progress.
+function preloadPiper(locale) {
+  if (!hasPiperVoice(locale)) return Promise.reject(new Error("no open-source voice for this language"));
+  return loadPiperVoice(locale, (got, total) => {
+    const mb = (n) => Math.round(n / 1e6);
+    if (!state.busy) setStatus(`Downloading the natural voice (one time): ${mb(got)}${total ? ` / ${mb(total)}` : ""} MB…`);
+  }).then((voice) => {
+    if ($("status").textContent.startsWith("Downloading the natural voice")) setStatus("");
+    return voice;
+  });
+}
+
+// Voice order: Gemini (most natural, small daily free quota) → Piper (open-source,
+// runs on the device, unlimited) → the browser's built-in voice.
 async function speak(text, wordSpans, onDone) {
   stopSpeaking();
   const token = speakToken;
+  const locale = state.settings.locale;
   const rate = state.settings.level === "beginner" ? 0.9 : 1;
   // Make sure the done callback fires exactly once, whichever path plays.
   let done = false;
@@ -573,22 +615,55 @@ async function speak(text, wordSpans, onDone) {
   };
   const fallback = (reason) => {
     if (token !== speakToken) return;
-    console.warn("Gemini voice unavailable, using the browser voice:", reason);
+    console.warn("Natural voice unavailable, using the browser voice:", reason);
     noteVoice(wordSpans, `Browser voice — ${reason}`);
     browserSpeak(text, rate, wordSpans, finish);
   };
+  const play = (audio, note) => {
+    if (token !== speakToken) return; // stopped or superseded while audio was generating
+    noteVoice(wordSpans, note);
+    playCloudAudio(audio.pcm, audio.sampleRate, wordSpans, finish, fallback);
+  };
   noteVoice(wordSpans, "");
   setAudioSession("playback");
-  let tts;
-  try {
-    tts = await geminiTts(text);
-  } catch (error) {
-    fallback(error.message);
-    return;
+
+  const cached = ttsCache.get(`${locale}|${text}`);
+  if (cached) return play(cached.audio, cached.note);
+
+  let reason = "";
+  if (!getKey()) reason = "no API key";
+  else if (geminiTtsBlocked()) reason = "Gemini voice daily limit reached";
+  else {
+    try {
+      const audio = await geminiTts(text);
+      rememberTts(`${locale}|${text}`, { audio, note: "" });
+      return play(audio, "");
+    } catch (error) {
+      if (token !== speakToken) return;
+      reason = geminiTtsBlocked() ? "Gemini voice daily limit reached" : error.message;
+    }
   }
-  if (token !== speakToken) return; // stopped or superseded while TTS was loading
-  if (!tts) return fallback("no API key");
-  playCloudAudio(tts.pcm, tts.sampleRate, wordSpans, finish, fallback);
+
+  // Use the on-device voice once it's downloaded; until then, start the download
+  // and use the browser voice for this reply so nobody waits.
+  if (hasPiperVoice(locale)) {
+    if (await piperReady(locale)) {
+      try {
+        const audio = await piperSpeak(text, locale, { speed: rate });
+        const note = "Open-source voice (Piper)";
+        rememberTts(`${locale}|${text}`, { audio, note });
+        return play(audio, note);
+      } catch (error) {
+        console.warn("Piper voice failed:", error);
+        reason = `open-source voice failed: ${error.message}`;
+      }
+    } else {
+      preloadPiper(locale).catch((error) => console.warn("Piper download failed:", error));
+      reason += " · downloading the natural voice";
+    }
+  }
+  if (token !== speakToken) return;
+  fallback(reason);
 }
 
 function startHighlight(wordSpans, elapsedFn, duration) {
@@ -1037,6 +1112,10 @@ $("start").addEventListener("click", async () => {
   renderStats();
   $("setup").hidden = true;
   $("conversation").hidden = false;
+  // Gemini voice is used up for today: get the on-device voice ready while the first reply loads.
+  if (geminiTtsBlocked() && hasPiperVoice(state.settings.locale)) {
+    preloadPiper(state.settings.locale).catch((error) => console.warn("Piper download failed:", error));
+  }
   sendTurn("");
 });
 

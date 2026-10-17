@@ -26,7 +26,7 @@ Typing works in any browser.
 
 ## Host it free on GitHub Pages
 
-1. Create a new GitHub repository and push these files (`index.html`, `app.js`, `styles.css`,
+1. Create a new GitHub repository and push these files (`index.html`, `app.js`, `piper.js`, `styles.css`,
    `README.md`) to the `main` branch.
    ```bash
    git init
@@ -46,12 +46,17 @@ Every visitor enters their own Gemini key, so you never ship a key and there's n
 
 - Conversation: `gemini-flash-lite-latest` (cheapest, highest free limits)
 - Speech: `gemini-3.8-flash-tts`
+- Backup speech: [Piper](https://github.com/rhasspy/piper), an open-source voice that runs on the
+  device (`piper.js`). It's used once the Gemini voice's daily free limit runs out. The voice
+  (German: "Thorsten", ~63 MB plus ~18 MB of pronunciation data) downloads the first time it's
+  needed and is then stored in the browser. No key, no limit. Japanese has no Piper voice, so it
+  uses the browser voice.
 
-Change these at the top of `app.js` if you like.
+Change these at the top of `app.js` / `piper.js` if you like.
 
 ## Notes
 
 - **No key is in this repo.** Never commit one. `.gitignore` excludes common secret files.
-- Free Gemini tiers have daily request caps; TTS has its own smaller cap, after which the app
-  uses the browser voice automatically.
+- Free Gemini tiers have daily request caps; TTS has its own smaller cap (10 a day), after which
+  the app switches to the Piper voice until the reset time. Replays reuse audio already made.
 - `docs/lingolooper-analysis.md` is background notes on the design and is not part of the app.
