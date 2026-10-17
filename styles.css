@@ -114,6 +114,9 @@ select, input { min-height: 44px; } /* comfortable touch targets; 16px font avoi
 .vocab { border-top: 1px solid var(--border); padding-top: 12px; margin-bottom: 16px; }
 .vocab-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .file-btn { display: inline-block; cursor: pointer; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 0.9rem; }
+.vocab-url-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.vocab-url-row input { flex: 1; min-width: 0; font-size: 0.85rem; }
+.vocab-url-row button { white-space: nowrap; font-size: 0.9rem; }
 .check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--text); }
 .check input { min-height: auto; width: auto; }
 .vocab-levels { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }

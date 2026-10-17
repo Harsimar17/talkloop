@@ -168,13 +168,24 @@ function flattenVocab(json) {
   return out;
 }
 
-async function importVocab(file) {
-  const json = JSON.parse(await file.text());
+const DEFAULT_VOCAB_URL = "https://harsimar17.github.io/Deutsch-Vocab-Helper/german_vocab.json";
+
+async function storeVocab(json) {
   const words = flattenVocab(json);
-  if (!words.length) throw new Error("No vocabulary found in that file.");
+  if (!words.length) throw new Error("No vocabulary found in that source.");
   await idbSet("vocab_words", words);
   await idbSet("vocab_seen", []);
   return { count: words.length, levels: [...new Set(words.map((w) => w.level))].sort() };
+}
+
+async function importVocab(file) {
+  return storeVocab(JSON.parse(await file.text()));
+}
+
+async function importVocabFromUrl(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
+  return storeVocab(await res.json());
 }
 
 async function vocabMeta() {
@@ -870,6 +881,21 @@ $("vocab-file").addEventListener("change", async (event) => {
   event.target.value = "";
 });
 
+// Load a vocab JSON from a URL.
+async function loadVocabUrl(url, { silent } = {}) {
+  if (!url) return;
+  if (!silent) $("vocab-status").textContent = "Loading from web…";
+  try {
+    const { count, levels } = await importVocabFromUrl(url);
+    $("vocab-status").textContent = `✓ ${count} words loaded (${levels.join(", ")}).`;
+    refreshVocabUI(count);
+  } catch (error) {
+    if (!silent) $("vocab-status").textContent = `Load failed: ${error.message}`;
+  }
+}
+
+$("load-url").addEventListener("click", () => loadVocabUrl($("vocab-url").value.trim()));
+
 function refreshVocabUI(count) {
   const useVocab = $("use-vocab");
   const have = count > 0;
@@ -934,4 +960,10 @@ if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => {};
 refreshKeyGate();
 renderStats();
 renderBookmarks();
-vocabMeta().then((m) => refreshVocabUI(m.count)).catch(() => {});
+// Show any already-imported vocab; if none, fetch the default URL in the background.
+vocabMeta()
+  .then((m) => {
+    refreshVocabUI(m.count);
+    if (m.count === 0) loadVocabUrl(DEFAULT_VOCAB_URL, { silent: true });
+  })
+  .catch(() => {});

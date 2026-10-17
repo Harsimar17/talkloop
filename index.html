@@ -82,9 +82,15 @@
       <div class="vocab">
         <div class="vocab-head">
           <strong>My vocabulary</strong>
-          <label class="file-btn">Import JSON
+          <label class="file-btn">Import file
             <input id="vocab-file" type="file" accept="application/json,.json" hidden />
           </label>
+        </div>
+        <div class="vocab-url-row">
+          <input id="vocab-url" type="url"
+                 value="https://harsimar17.github.io/Deutsch-Vocab-Helper/german_vocab.json"
+                 placeholder="https://…/vocab.json" />
+          <button type="button" id="load-url">Load from web</button>
         </div>
         <p id="vocab-status" class="muted"></p>
         <label class="check">
