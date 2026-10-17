@@ -1,5 +1,5 @@
 // Talkloop client: speech in, AI character turn out, spoken back with word highlighting.
-import { hasPiperVoice, piperReady, loadPiperVoice, piperSpeak } from "./piper.js";
+import { hasPiperVoice, piperLoaded, piperReady, loadPiperVoice, piperSpeak } from "./piper.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -718,17 +718,55 @@ function rememberTts(text, audio) {
   if (ttsCache.size > TTS_CACHE_MAX) ttsCache.delete(ttsCache.keys().next().value);
 }
 
-// Start downloading the open-source voice in the background, showing progress.
+// Get the open-source voice ready in the background (download the first time, then load
+// it into memory), showing progress on the setup screen and in the call.
+const piperLoads = new Map(); // locale -> Promise
+function setVoiceStatus(text) {
+  $("voice-status").textContent = text;
+  const inCall = !$("conversation").hidden;
+  const mine = $("status").textContent.startsWith("Voice:");
+  if (inCall && !state.busy && !state.paused && (mine || !$("status").textContent)) setStatus(text);
+  else if (!text && mine) setStatus("");
+}
 function preloadPiper(locale) {
   if (!hasPiperVoice(locale)) return Promise.reject(new Error("no open-source voice for this language"));
-  return loadPiperVoice(locale, (got, total) => {
+  if (piperLoaded(locale)) return loadPiperVoice(locale);
+  if (!piperLoads.has(locale)) {
     const mb = (n) => Math.round(n / 1e6);
-    if (!state.busy) setStatus(`Downloading the natural voice (one time): ${mb(got)}${total ? ` / ${mb(total)}` : ""} MB…`);
-  }).then((voice) => {
-    if ($("status").textContent.startsWith("Downloading the natural voice")) setStatus("");
-    return voice;
-  });
+    setVoiceStatus("Voice: getting ready…");
+    const p = loadPiperVoice(locale, (got, total) => {
+      setVoiceStatus(`Voice: downloading (one time) ${mb(got)}${total ? ` / ${mb(total)}` : ""} MB…`);
+    }).then(
+      (voice) => {
+        if ($("language").selectedOptions[0]?.dataset.locale === locale || state.settings?.locale === locale) {
+          setVoiceStatus("");
+          $("voice-status").textContent = "✓ Voice ready";
+        }
+        return voice;
+      },
+      (error) => {
+        piperLoads.delete(locale); // allow another try later
+        setVoiceStatus("Voice: download failed, using a backup voice for now.");
+        throw error;
+      },
+    );
+    piperLoads.set(locale, p);
+  }
+  return piperLoads.get(locale);
 }
+
+// Load the voice for the language picked on the setup screen, before the call starts.
+function preloadSelectedVoice() {
+  const locale = $("language").selectedOptions[0]?.dataset.locale;
+  if (!locale) return;
+  if (!hasPiperVoice(locale)) {
+    $("voice-status").textContent = "";
+    return;
+  }
+  preloadPiper(locale).catch((error) => console.warn("Piper voice failed to load:", error));
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Voice order: Piper (open-source, runs on the device, unlimited) → Gemini (small
 // daily free quota) → the browser's built-in voice.
@@ -764,11 +802,17 @@ async function speak(text, wordSpans, onDone) {
   const cached = ttsCache.get(`${locale}|${text}`);
   if (cached) return play(cached.audio, cached.note);
 
-  // 1. Piper, once downloaded. Until then, start the download and use the next voice
-  //    for this reply so nobody waits.
+  // 1. Piper, once it's loaded. A reply never waits for a download: until the voice is
+  //    ready, it starts loading and this reply uses the next voice. If it's already
+  //    downloaded and only loading into memory, give it a moment first.
   let piperNote = "";
   if (hasPiperVoice(locale)) {
-    if (await piperReady(locale)) {
+    if (!piperLoaded(locale)) {
+      const loading = preloadPiper(locale).catch(() => null);
+      if (await piperReady(locale)) await Promise.race([loading, sleep(1500)]);
+      if (token !== speakToken) return;
+    }
+    if (piperLoaded(locale)) {
       try {
         const audio = await piperSpeak(text, locale, { speed: rate });
         rememberTts(`${locale}|${text}`, { audio, note: "" });
@@ -778,8 +822,7 @@ async function speak(text, wordSpans, onDone) {
         piperNote = `open-source voice failed: ${error.message}`;
       }
     } else {
-      preloadPiper(locale).catch((error) => console.warn("Piper download failed:", error));
-      piperNote = "open-source voice still downloading";
+      piperNote = "open-source voice still loading";
     }
   } else {
     piperNote = "no open-source voice for this language";
@@ -1438,6 +1481,8 @@ $("mode").addEventListener("change", () => {
   $("scenario").closest("label").style.opacity = usesScene ? "1" : "0.5";
 });
 
+$("language").addEventListener("change", preloadSelectedVoice);
+
 $("composer").addEventListener("submit", (event) => {
   event.preventDefault();
   const text = $("text").value.trim();
@@ -1496,6 +1541,8 @@ if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => {};
 refreshKeyGate();
 renderStats();
 renderBookmarks();
+// Get the voice ready while the learner picks their settings, so the first reply doesn't wait.
+preloadSelectedVoice();
 // Show any already-imported vocab; if none, fetch the default URL in the background.
 vocabMeta()
   .then((m) => {

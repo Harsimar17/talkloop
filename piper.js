@@ -86,6 +86,11 @@ async function cachedFetch(url, onProgress) {
   return bytes.buffer;
 }
 
+// Is the voice loaded into memory, so speaking can start right away?
+export function piperLoaded(locale) {
+  return ready.has(locale.split("-")[0]);
+}
+
 // Is the voice for this locale already downloaded (or loaded)?
 export async function piperReady(locale) {
   const lang = locale.split("-")[0];

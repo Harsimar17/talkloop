@@ -219,6 +219,8 @@ body.in-call { overflow: hidden; }
 .muted a { color: var(--accent); }
 .keyline { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; font-size: 0.85rem; }
 
+.voice-status { margin: -4px 0 12px; font-size: 0.85rem; }
+.voice-status:empty { display: none; }
 .vocab { border-top: 1px solid var(--border); padding-top: 12px; margin-bottom: 16px; }
 .vocab-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .file-btn { display: inline-block; cursor: pointer; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 0.9rem; }
