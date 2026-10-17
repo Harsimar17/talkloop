@@ -666,8 +666,8 @@ function preloadPiper(locale) {
   });
 }
 
-// Voice order: Gemini (most natural, small daily free quota) → Piper (open-source,
-// runs on the device, unlimited) → the browser's built-in voice.
+// Voice order: Piper (open-source, runs on the device, unlimited) → Gemini (small
+// daily free quota) → the browser's built-in voice.
 async function speak(text, wordSpans, onDone) {
   stopSpeaking();
   const token = speakToken;
@@ -700,39 +700,45 @@ async function speak(text, wordSpans, onDone) {
   const cached = ttsCache.get(`${locale}|${text}`);
   if (cached) return play(cached.audio, cached.note);
 
-  let reason = "";
-  if (!getKey()) reason = "no API key";
-  else if (geminiTtsBlocked()) reason = "Gemini voice daily limit reached";
-  else {
-    try {
-      const audio = await geminiTts(text);
-      rememberTts(`${locale}|${text}`, { audio, note: "" });
-      return play(audio, "");
-    } catch (error) {
-      if (token !== speakToken) return;
-      reason = geminiTtsBlocked() ? "Gemini voice daily limit reached" : error.message;
-    }
-  }
-
-  // Use the on-device voice once it's downloaded; until then, start the download
-  // and use the browser voice for this reply so nobody waits.
+  // 1. Piper, once downloaded. Until then, start the download and use the next voice
+  //    for this reply so nobody waits.
+  let piperNote = "";
   if (hasPiperVoice(locale)) {
     if (await piperReady(locale)) {
       try {
         const audio = await piperSpeak(text, locale, { speed: rate });
-        const note = "Open-source voice (Piper)";
-        rememberTts(`${locale}|${text}`, { audio, note });
-        return play(audio, note);
+        rememberTts(`${locale}|${text}`, { audio, note: "" });
+        return play(audio, "");
       } catch (error) {
         console.warn("Piper voice failed:", error);
-        reason = `open-source voice failed: ${error.message}`;
+        piperNote = `open-source voice failed: ${error.message}`;
       }
     } else {
       preloadPiper(locale).catch((error) => console.warn("Piper download failed:", error));
-      reason += " · downloading the natural voice";
+      piperNote = "open-source voice still downloading";
     }
+  } else {
+    piperNote = "no open-source voice for this language";
   }
   if (token !== speakToken) return;
+
+  // 2. Gemini, while the free daily quota lasts.
+  let reason = piperNote;
+  if (!getKey()) reason += " · no API key";
+  else if (geminiTtsBlocked()) reason += " · Gemini voice daily limit reached";
+  else {
+    try {
+      const audio = await geminiTts(text);
+      const note = `Gemini voice — ${piperNote}`;
+      rememberTts(`${locale}|${text}`, { audio, note });
+      return play(audio, note);
+    } catch (error) {
+      if (token !== speakToken) return;
+      reason += geminiTtsBlocked() ? " · Gemini voice daily limit reached" : ` · ${error.message}`;
+    }
+  }
+
+  // 3. The browser's built-in voice.
   fallback(reason);
 }
 
@@ -1303,8 +1309,8 @@ $("start").addEventListener("click", async () => {
   renderStats();
   $("setup").hidden = true;
   enterCall();
-  // Gemini voice is used up for today: get the on-device voice ready while the first reply loads.
-  if (geminiTtsBlocked() && hasPiperVoice(state.settings.locale)) {
+  // The on-device voice is the default: get it ready while the first reply loads.
+  if (hasPiperVoice(state.settings.locale)) {
     preloadPiper(state.settings.locale).catch((error) => console.warn("Piper download failed:", error));
   }
   sendTurn("");

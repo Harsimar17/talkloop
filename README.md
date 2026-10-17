@@ -18,8 +18,8 @@ Typing works in any browser.
 ## Features
 
 - **Voice conversation** with live transcripts; a hands-free mode (tap the mic, then just talk).
-- **Native-sounding replies** via Gemini TTS, with word-by-word highlighting; falls back to the
-  browser voice if TTS quota runs out.
+- **Natural-sounding replies** from an open-source voice that runs on your device (no limit),
+  with word-by-word highlighting.
 - **Coach** corrections and tips each turn, **suggestions**, per-message **translation**.
 - **Word explorer**: tap any word for meaning, pronunciation and an example; save it.
 - **Streaks** and a per-scene rapport score (stored per browser).
@@ -45,18 +45,18 @@ Every visitor enters their own Gemini key, so you never ship a key and there's n
 ## Models used
 
 - Conversation: `gemini-flash-lite-latest` (cheapest, highest free limits)
-- Speech: `gemini-3.8-flash-tts`
-- Backup speech: [Piper](https://github.com/rhasspy/piper), an open-source voice that runs on the
-  device (`piper.js`). It's used once the Gemini voice's daily free limit runs out. The voice
-  (German: "Thorsten", ~63 MB plus ~18 MB of pronunciation data) downloads the first time it's
-  needed and is then stored in the browser. No key, no limit. Japanese has no Piper voice, so it
-  uses the browser voice.
+- Speech (default): [Piper](https://github.com/rhasspy/piper), an open-source voice that runs on
+  the device (`piper.js`). The voice (German: "Thorsten", ~63 MB plus ~18 MB of pronunciation
+  data) downloads when you start your first conversation and is then stored in the browser.
+  No key, no limit.
+- Speech (backup): `gemini-3.8-flash-tts`, used while Piper is still downloading or for
+  Japanese, which has no Piper voice. After that, the browser's own voice.
 
 Change these at the top of `app.js` / `piper.js` if you like.
 
 ## Notes
 
 - **No key is in this repo.** Never commit one. `.gitignore` excludes common secret files.
-- Free Gemini tiers have daily request caps; TTS has its own smaller cap (10 a day), after which
-  the app switches to the Piper voice until the reset time. Replays reuse audio already made.
+- Free Gemini tiers have daily request caps; Gemini TTS has its own small cap (10 a day), which
+  is why Piper is the default voice. Replays reuse audio already made.
 - `docs/lingolooper-analysis.md` is background notes on the design and is not part of the app.
