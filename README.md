@@ -1,4 +1,4 @@
-# Talkloop
+# Talkloop(A Fully Vibe Coded Web Application)
 
 Practise speaking a language with an AI character — live voice input, native-sounding
 spoken replies, coaching, translations and a word explorer. It runs **entirely in your
