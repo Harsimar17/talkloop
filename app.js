@@ -517,6 +517,8 @@ function startListening() {
     const spoken = finalText.trim();
     if (state.paused) {
       // Paused mid-sentence: drop it rather than sending half a thought.
+    } else if (isPauseCommand(spoken)) {
+      setPaused(true, { byVoice: true });
     } else if (spoken) {
       // Hands-free: send straight away. Listening resumes after the reply is spoken.
       sendTurn(spoken);
@@ -530,6 +532,68 @@ function startListening() {
   recognizer.start();
   setMic(true);
   setStatus("Listening… just talk. Tap the mic to stop hands-free.");
+}
+
+// ---------- voice commands: "zwei Minuten" pauses the call, "zurück" / "back" resumes ----------
+// Only short utterances count, so "Ich warte zwei Minuten auf den Bus" is still sent normally.
+function normalizeSpeech(text) {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\b2\b/g, "zwei").replace(/\s+/g, " ").trim();
+}
+function isPauseCommand(text) {
+  const t = normalizeSpeech(text);
+  return t.split(" ").length <= 4 && /\bzwei minuten\b/.test(t);
+}
+function isResumeCommand(text) {
+  const t = normalizeSpeech(text);
+  // de-DE recognition may hear the English "back" as "Beck" or "bäck".
+  // (\b doesn't treat ü as a letter, so use Unicode-aware word edges.)
+  return t.split(" ").length <= 5 && /(?<!\p{L})(zurück|zurueck|back|beck|bäck|bin wieder da)(?!\p{L})/u.test(t);
+}
+
+// While paused by voice, keep a quiet listener running that only waits for the resume word.
+// Speech recognition stops by itself after a while, so it restarts until the call resumes.
+let wakeRecognizer = null;
+let wakeEnded = null; // resolves when the wake listener has fully stopped
+function startWakeListener() {
+  if (!Recognition || wakeRecognizer || !state.paused) return;
+  const rec = new Recognition();
+  rec.lang = state.settings.locale;
+  rec.interimResults = true;
+  rec.continuous = true;
+  let heardResume = false;
+  let denied = false;
+  let resolveEnded;
+  wakeEnded = new Promise((r) => { resolveEnded = r; });
+  rec.onresult = (event) => {
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (isResumeCommand(event.results[i][0].transcript)) {
+        heardResume = true;
+        rec.abort();
+        return;
+      }
+    }
+  };
+  rec.onerror = (event) => { if (event.error === "not-allowed") denied = true; };
+  rec.onend = () => {
+    wakeRecognizer = null;
+    resolveEnded();
+    updateCallState();
+    if (heardResume) setPaused(false);
+    else if (state.paused && pausedByVoice && !denied) setTimeout(startWakeListener, 300);
+  };
+  wakeRecognizer = rec;
+  try {
+    rec.start();
+  } catch {
+    wakeRecognizer = null;
+    resolveEnded();
+  }
+  updateCallState();
+}
+function stopWakeListener() {
+  if (!wakeRecognizer) return Promise.resolve();
+  wakeRecognizer.abort();
+  return wakeEnded;
 }
 
 function stopListening() {
@@ -1048,7 +1112,7 @@ function updateCallState() {
   let key = "idle";
   let text = state.handsFree ? "Your turn — just talk" : "Your turn";
   if (state.finished) { key = "ended"; text = "Scene complete"; }
-  else if (state.paused) { key = "paused"; text = "Paused"; }
+  else if (state.paused) { key = "paused"; text = wakeRecognizer ? "Paused — say “zurück”" : "Paused"; }
   else if (state.busy) { key = "thinking"; text = "Thinking…"; }
   else if (state.speaking) { key = "speaking"; text = "Speaking…"; }
   else if (recognizer) { key = "listening"; text = "Listening…"; }
@@ -1087,27 +1151,38 @@ function startCallTimer() {
 }
 
 // Pause = put the call on hold: stop the voice and the mic, freeze the timer.
+// Paused by voice ("zwei Minuten"), the mic keeps listening only for the resume word.
 let pendingReply = null; // a reply that arrived while paused, spoken on resume
 let resumeHandsFree = false;
-function setPaused(paused) {
+let pausedByVoice = false;
+function setPaused(paused, { byVoice = false } = {}) {
   if (paused === state.paused) return;
   if (paused) {
     resumeHandsFree = state.handsFree;
+    pausedByVoice = byVoice && Boolean(Recognition);
     state.paused = true; // set first so nothing restarts the mic or voice
     if (recognizer) stopListening();
     state.handsFree = false;
     stopSpeaking();
     holdCallTimer();
-    setStatus("Call paused. Tap Resume to carry on.");
+    setStatus(pausedByVoice
+      ? "Call paused. Say “zurück” or “back” when you're ready, or tap Resume."
+      : "Call paused. Tap Resume to carry on.");
+    if (pausedByVoice) startWakeListener();
   } else {
     state.paused = false;
+    pausedByVoice = false;
     runCallTimer();
     setStatus("");
     state.handsFree = resumeHandsFree;
     const reply = pendingReply;
     pendingReply = null;
-    if (reply) speak(reply.text, reply.spans, () => maybeResumeListening());
-    else maybeResumeListening();
+    // The browser allows one recognizer at a time: let the resume listener stop first.
+    stopWakeListener().then(() => {
+      if (state.paused) return;
+      if (reply) speak(reply.text, reply.spans, () => maybeResumeListening());
+      else maybeResumeListening();
+    });
   }
   const btn = $("pause");
   btn.setAttribute("aria-pressed", String(paused));
@@ -1368,6 +1443,10 @@ $("composer").addEventListener("submit", (event) => {
   const text = $("text").value.trim();
   if (!text) return;
   $("text").value = "";
+  if (isPauseCommand(text)) {
+    setPaused(true);
+    return;
+  }
   stopSpeaking();
   sendTurn(text);
 });
