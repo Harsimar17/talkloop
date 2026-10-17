@@ -333,11 +333,16 @@ async function geminiWord({ word, sentence, language, nativeLanguage }) {
   });
 }
 
-// Gemini TTS returns raw PCM; wrap it in a WAV data URL the browser can play.
-function pcmBase64ToWavUrl(b64, sampleRate = 24000) {
+// Gemini TTS returns base64 16-bit PCM; decode it into raw bytes.
+function base64ToBytes(b64) {
   const bin = atob(b64);
-  const pcm = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) pcm[i] = bin.charCodeAt(i);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+// Wrap PCM bytes in a WAV blob URL (fallback path for browsers without Web Audio).
+function pcmToWavUrl(pcm, sampleRate = 24000) {
   const header = new ArrayBuffer(44);
   const view = new DataView(header);
   const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
@@ -373,12 +378,12 @@ async function geminiTts(text) {
       },
     }),
   });
-  if (!res.ok) return null;
   const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error?.message ?? `TTS request failed (${res.status})`);
   const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
-  if (!part) return null;
+  if (!part) throw new Error("TTS returned no audio");
   const rate = /rate=(\d+)/.exec(part.inlineData.mimeType ?? "");
-  return pcmBase64ToWavUrl(part.inlineData.data, rate ? Number(rate[1]) : 24000);
+  return { pcm: base64ToBytes(part.inlineData.data), sampleRate: rate ? Number(rate[1]) : 24000 };
 }
 
 // ---------- speech recognition (browser) ----------
@@ -452,7 +457,10 @@ function setMic(on) {
 }
 
 // ---------- speech synthesis with word highlighting ----------
-// Rank voices so the browser's natural/neural (cloud) voice for the locale wins
+// Apple's Eloquence and novelty voices sound synthetic; Safari sometimes lists them first.
+const ROBOTIC_VOICES = /^(eddy|flo|grandma|grandpa|reed|rocko|sandy|shelley|albert|bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|fred|junior|ralph|kathy)\b/;
+
+// Rank voices so the browser's natural/neural voice for the locale wins
 // over the default robotic one.
 function voiceFor(locale) {
   const voices = speechSynthesis.getVoices();
@@ -465,21 +473,74 @@ function voiceFor(locale) {
     const name = v.name.toLowerCase();
     if (v.lang === locale || v.lang.replace("_", "-") === locale) s += 40; // exact region
     if (!v.localService) s += 30; // online voices are the high-quality neural ones
-    if (/(natural|neural|wavenet|premium|enhanced|siri|multilingual)/.test(name)) s += 25;
+    if (/premium/.test(name)) s += 35; // Apple's downloadable top-quality voices
+    else if (/enhanced/.test(name)) s += 30;
+    if (/(natural|neural|wavenet|siri|multilingual)/.test(name)) s += 25;
     if (/google|microsoft/.test(name)) s += 10;
     if (/compact|espeak|pico/.test(name)) s -= 20; // known robotic engines
+    if (ROBOTIC_VOICES.test(name)) s -= 60;
     return s;
   };
 
   return candidates.slice().sort((a, b) => score(b) - score(a))[0];
 }
 
+// Safari loads voices lazily; wait briefly so we don't speak with the default one.
+function voicesReady() {
+  if (speechSynthesis.getVoices().length) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      speechSynthesis.removeEventListener("voiceschanged", done);
+      resolve();
+    };
+    speechSynthesis.addEventListener("voiceschanged", done);
+    setTimeout(done, 1000);
+  });
+}
+
 let currentAudio = null;
+let currentSource = null;
+let currentHighlight = null;
+let speakToken = 0; // bumps on every speak/stop so a slow TTS reply can't play over a newer one
+
+// A single AudioContext, unlocked on the first user tap. Playing generated audio
+// through Web Audio is far more reliable than <audio> in Safari / on iPhone.
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) audioCtx = new AC();
+  }
+  return audioCtx;
+}
+
+// Runs inside every user gesture so Safari lets audio play later, after network waits.
+let speechPrimed = false;
+function unlockAudio() {
+  const ctx = getAudioCtx();
+  if (ctx && ctx.state !== "running") {
+    ctx.resume().catch(() => {});
+    // Safari only truly unlocks once something is started inside the gesture.
+    const blip = ctx.createBufferSource();
+    blip.buffer = ctx.createBuffer(1, 1, 22050);
+    blip.connect(ctx.destination);
+    blip.start();
+  }
+  // Safari's speech synthesis also needs one gesture-initiated utterance.
+  if (!speechPrimed && "speechSynthesis" in window) {
+    speechPrimed = true;
+    speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+  }
+}
+for (const type of ["click", "touchend", "keydown"]) {
+  document.addEventListener(type, unlockAudio, { capture: true });
+}
 
 // Speak with the native-sounding cloud voice; fall back to the browser voice
-// if the server TTS is unavailable.
+// if the cloud TTS is unavailable or the browser won't play it.
 async function speak(text, wordSpans, onDone) {
   stopSpeaking();
+  const token = speakToken;
   const rate = state.settings.level === "beginner" ? 0.9 : 1;
   // Make sure the done callback fires exactly once, whichever path plays.
   let done = false;
@@ -488,42 +549,99 @@ async function speak(text, wordSpans, onDone) {
     done = true;
     if (typeof onDone === "function") onDone();
   };
+  const fallback = (reason) => {
+    if (token !== speakToken) return;
+    console.warn("Gemini voice unavailable, using the browser voice:", reason);
+    browserSpeak(text, rate, wordSpans, finish);
+  };
+  let tts;
   try {
-    const wavUrl = await geminiTts(text);
-    if (wavUrl) {
-      playCloudAudio(wavUrl, wordSpans, finish);
-      return;
-    }
-  } catch {
-    // TTS unavailable (quota/network) — fall through to the browser voice
+    tts = await geminiTts(text);
+  } catch (error) {
+    fallback(error.message);
+    return;
   }
-  browserSpeak(text, rate, wordSpans, finish);
+  if (token !== speakToken) return; // stopped or superseded while TTS was loading
+  if (!tts) return fallback("no API key");
+  playCloudAudio(tts.pcm, tts.sampleRate, wordSpans, finish, fallback);
 }
 
-function playCloudAudio(wavUrl, wordSpans, onDone) {
-  const audio = new Audio(wavUrl);
+function startHighlight(wordSpans, elapsedFn, duration) {
+  if (!wordSpans.length) return null;
+  return setInterval(() => {
+    const i = Math.min(wordSpans.length - 1, Math.floor((elapsedFn() / duration) * wordSpans.length));
+    wordSpans.forEach((span, idx) => span.classList.toggle("speaking", idx === i));
+  }, 80);
+}
+
+async function playCloudAudio(pcm, sampleRate, wordSpans, onDone, onFail) {
+  const token = speakToken;
+  const ctx = getAudioCtx();
+  if (!ctx) {
+    playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail);
+    return;
+  }
+  if (ctx.state !== "running") {
+    await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 300))]);
+    if (token !== speakToken) return;
+    // A still-suspended context would play silently and never end; use the browser voice.
+    if (ctx.state !== "running") return onFail("audio is locked until you tap the page");
+  }
+
+  // 16-bit little-endian mono PCM -> AudioBuffer.
+  const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  const samples = Math.floor(pcm.byteLength / 2);
+  const buffer = ctx.createBuffer(1, samples, sampleRate);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < samples; i++) channel[i] = view.getInt16(i * 2, true) / 32768;
+
+  const clear = () => {
+    if (currentHighlight) { clearInterval(currentHighlight); currentHighlight = null; }
+    wordSpans.forEach((span) => span.classList.remove("speaking"));
+  };
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(ctx.destination);
+  currentSource = src;
+  const startedAt = ctx.currentTime;
+  currentHighlight = startHighlight(wordSpans, () => ctx.currentTime - startedAt, buffer.duration);
+  src.onended = () => { currentSource = null; clear(); onDone(); };
+  try {
+    src.start();
+  } catch (error) {
+    currentSource = null;
+    clear();
+    onFail(error.message);
+  }
+}
+
+// Fallback for the rare browser without Web Audio.
+function playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail) {
+  const url = pcmToWavUrl(pcm, sampleRate);
+  const audio = new Audio(url);
   currentAudio = audio;
-  // Approximate karaoke highlight: spread words across the clip's duration.
   audio.ontimeupdate = () => {
-    if (!audio.duration) return;
+    if (!audio.duration || !wordSpans.length) return;
     const i = Math.min(wordSpans.length - 1, Math.floor((audio.currentTime / audio.duration) * wordSpans.length));
     wordSpans.forEach((span, idx) => span.classList.toggle("speaking", idx === i));
   };
   const clear = () => {
     wordSpans.forEach((span) => span.classList.remove("speaking"));
-    URL.revokeObjectURL(wavUrl);
-    if (typeof onDone === "function") onDone();
+    URL.revokeObjectURL(url);
   };
-  audio.onended = clear;
-  audio.onerror = clear;
-  audio.play().catch(() => clear());
+  audio.onended = () => { clear(); onDone(); };
+  audio.onerror = () => { clear(); onFail("audio could not be played"); };
+  audio.play().catch((error) => { clear(); onFail(error.message); });
 }
 
-function browserSpeak(text, rate, wordSpans, onDone) {
+async function browserSpeak(text, rate, wordSpans, onDone) {
   if (!("speechSynthesis" in window)) {
     if (typeof onDone === "function") onDone();
     return;
   }
+  const token = speakToken;
+  await voicesReady();
+  if (token !== speakToken) return;
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = state.settings.locale;
   const voice = voiceFor(state.settings.locale);
@@ -547,7 +665,15 @@ function browserSpeak(text, rate, wordSpans, onDone) {
 }
 
 function stopSpeaking() {
+  speakToken++;
+  if (currentHighlight) { clearInterval(currentHighlight); currentHighlight = null; }
+  document.querySelectorAll(".word.speaking").forEach((span) => span.classList.remove("speaking"));
+  if (currentSource) {
+    try { currentSource.onended = null; currentSource.stop(); } catch { /* already stopped */ }
+    currentSource = null;
+  }
   if (currentAudio) {
+    currentAudio.onended = currentAudio.onerror = null;
     currentAudio.pause();
     currentAudio = null;
   }
