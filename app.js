@@ -114,6 +114,104 @@ const MODES = {
   },
 };
 
+// ---------- Vocabulary (user-imported, stored locally in IndexedDB) ----------
+const VOCAB_DB = "talkloop";
+const VOCAB_KV = "kv";
+
+function idb() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(VOCAB_DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(VOCAB_KV);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+async function idbSet(key, val) {
+  const db = await idb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(VOCAB_KV, "readwrite");
+    tx.objectStore(VOCAB_KV).put(val, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbGet(key) {
+  const db = await idb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(VOCAB_KV, "readonly");
+    const rq = tx.objectStore(VOCAB_KV).get(key);
+    rq.onsuccess = () => resolve(rq.result);
+    rq.onerror = () => reject(rq.error);
+  });
+}
+
+// Flatten the nested { levels: { A1: { nouns: { der:[...] }, verbs:[...] } } } shape
+// into a flat list of { de, en, example, level, cat }.
+function flattenVocab(json) {
+  const out = [];
+  const levels = json?.levels ?? {};
+  const add = (e, level, cat) => {
+    if (e && e.de) out.push({ de: e.de, en: e.en ?? "", example: e.example ?? "", level, cat });
+  };
+  for (const level of Object.keys(levels)) {
+    const cats = levels[level] ?? {};
+    for (const cat of Object.keys(cats)) {
+      const v = cats[cat];
+      if (Array.isArray(v)) v.forEach((e) => add(e, level, cat));
+      else if (v && typeof v === "object") {
+        for (const sub of Object.keys(v)) {
+          if (Array.isArray(v[sub])) v[sub].forEach((e) => add(e, level, cat));
+        }
+      }
+    }
+  }
+  return out;
+}
+
+async function importVocab(file) {
+  const json = JSON.parse(await file.text());
+  const words = flattenVocab(json);
+  if (!words.length) throw new Error("No vocabulary found in that file.");
+  await idbSet("vocab_words", words);
+  await idbSet("vocab_seen", []);
+  return { count: words.length, levels: [...new Set(words.map((w) => w.level))].sort() };
+}
+
+async function vocabMeta() {
+  const words = (await idbGet("vocab_words")) ?? [];
+  return { count: words.length, levels: [...new Set(words.map((w) => w.level))].sort() };
+}
+
+// In-memory state for the active session.
+let vocabWords = [];
+let vocabPointer = 0;
+let vocabSeen = new Set();
+
+async function loadVocabForSession(levels) {
+  const all = (await idbGet("vocab_words")) ?? [];
+  vocabWords = all.filter((w) => levels.includes(w.level));
+  for (let i = vocabWords.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [vocabWords[i], vocabWords[j]] = [vocabWords[j], vocabWords[i]];
+  }
+  vocabSeen = new Set((await idbGet("vocab_seen")) ?? []);
+  vocabPointer = 0;
+  return vocabWords.length;
+}
+
+// Pick the next rotating batch of words to weave into the conversation.
+function nextVocabBatch(n = 12) {
+  if (!vocabWords.length) return [];
+  const batch = [];
+  for (let scanned = 0; batch.length < n && scanned < vocabWords.length; scanned++) {
+    batch.push(vocabWords[vocabPointer % vocabWords.length]);
+    vocabPointer++;
+  }
+  batch.forEach((w) => vocabSeen.add(w.de));
+  idbSet("vocab_seen", [...vocabSeen]).catch(() => {});
+  return batch;
+}
+
 const TURN_SCHEMA = {
   type: "OBJECT",
   properties: {
@@ -149,10 +247,10 @@ function personaFor({ scenario, mode }) {
   return m.usesScene ? SCENARIOS[scenario] ?? SCENARIOS.cafe : PARTNER;
 }
 
-function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }) {
+function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, targetWords = []) {
   const m = MODES[mode] ?? MODES.scene;
   const persona = personaFor({ scenario, mode });
-  return [
+  const lines = [
     `You are ${persona.character}, ${persona.setting}. Stay in character and speak only ${language}.`,
     `The learner is a ${level} ${language} speaker whose native language is ${nativeLanguage}.`,
     "Keep each reply to one or two short sentences that match the learner's level, and end with something they can respond to.",
@@ -160,7 +258,14 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }) {
     "Speech recognition produced the learner's message, so ignore missing punctuation and obvious transcription slips.",
     `Write reply_translation, coach.tip and nothing else in ${nativeLanguage}.`,
     "Give a correction only when the learner made a real grammar or word-choice mistake.",
-  ].join("\n");
+  ];
+  if (targetWords.length) {
+    const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
+    lines.push(
+      `The learner is practising this vocabulary. Naturally weave two to four of these words or phrases into your reply where they fit — do not force all of them, keep it natural, and give the learner a chance to use them too: ${list}.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 async function geminiJson({ systemInstruction, schema, contents }) {
@@ -197,11 +302,13 @@ function historyToContents(history, userText) {
 async function geminiTurn(settings, history, message) {
   const mode = MODES[settings.request.mode] ?? MODES.scene;
   const userText = message.trim() || mode.opener;
+  const targetWords = settings.vocab?.enabled ? nextVocabBatch() : [];
   const turn = await geminiJson({
-    systemInstruction: turnSystemPrompt(settings.request),
+    systemInstruction: turnSystemPrompt(settings.request, targetWords),
     schema: TURN_SCHEMA,
     contents: historyToContents(history, userText),
   });
+  turn.focusWords = targetWords;
   // In open modes the conversation never ends on its own.
   if (!mode.endable) turn.conversation_finished = false;
   return { turn, userText };
@@ -549,6 +656,29 @@ function renderSuggestions(suggestions) {
   }
 }
 
+function renderFocusWords(words) {
+  const box = $("focus");
+  if (!box) return;
+  if (!words || !words.length) {
+    box.hidden = true;
+    box.replaceChildren();
+    return;
+  }
+  box.hidden = false;
+  box.replaceChildren();
+  const label = document.createElement("span");
+  label.className = "focus-label";
+  label.textContent = "Practising: ";
+  box.append(label);
+  for (const w of words) {
+    const chip = document.createElement("span");
+    chip.className = "focus-word";
+    chip.textContent = w.de;
+    chip.title = w.en;
+    box.append(chip);
+  }
+}
+
 function setStatus(text) {
   $("status").textContent = text;
 }
@@ -574,6 +704,7 @@ async function sendTurn(message) {
     addCharacterMessage(turn);
     if (message) renderCoach(turn.coach);
     renderSuggestions(turn.suggestions);
+    renderFocusWords(turn.focusWords);
     renderStats();
 
     if (turn.conversation_finished) {
@@ -690,15 +821,25 @@ $("change-key").addEventListener("click", () => {
   refreshKeyGate();
 });
 
-$("start").addEventListener("click", () => {
+$("start").addEventListener("click", async () => {
   const languageSelect = $("language");
   const scenario = $("scenario").value;
   const mode = $("mode").value;
   const usesScene = (MODES[mode] ?? MODES.scene).usesScene;
+  const useVocab = $("use-vocab").checked && !$("use-vocab").disabled;
+  const levels = ["A1", "A2", "B1"].filter((l) => $(`vlev-${l}`)?.checked);
+
+  let vocab = { enabled: false };
+  if (useVocab) {
+    const loaded = await loadVocabForSession(levels.length ? levels : ["A1", "A2", "B1"]);
+    vocab = { enabled: loaded > 0, levels };
+  }
+
   state.settings = {
     locale: languageSelect.selectedOptions[0].dataset.locale,
     level: $("level").value,
     characterName: usesScene ? CHARACTER_NAMES[scenario] : PARTNER.character,
+    vocab,
     request: {
       language: languageSelect.value,
       nativeLanguage: $("native").value,
@@ -713,6 +854,31 @@ $("start").addEventListener("click", () => {
   $("conversation").hidden = false;
   sendTurn("");
 });
+
+// Import a vocab JSON file into the browser (IndexedDB).
+$("vocab-file").addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  $("vocab-status").textContent = "Importing…";
+  try {
+    const { count, levels } = await importVocab(file);
+    $("vocab-status").textContent = `✓ ${count} words imported (${levels.join(", ")}).`;
+    refreshVocabUI(count);
+  } catch (error) {
+    $("vocab-status").textContent = `Import failed: ${error.message}`;
+  }
+  event.target.value = "";
+});
+
+function refreshVocabUI(count) {
+  const useVocab = $("use-vocab");
+  const have = count > 0;
+  useVocab.disabled = !have;
+  $("vocab-levels").style.opacity = have ? "1" : "0.5";
+  if (have && !$("vocab-status").textContent) {
+    $("vocab-status").textContent = `✓ ${count} words ready.`;
+  }
+}
 
 // The scene only matters in scene role-play; grey it out otherwise.
 $("mode").addEventListener("change", () => {
@@ -768,3 +934,4 @@ if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => {};
 refreshKeyGate();
 renderStats();
 renderBookmarks();
+vocabMeta().then((m) => refreshVocabUI(m.count)).catch(() => {});

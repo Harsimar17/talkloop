@@ -78,6 +78,27 @@
           </select>
         </label>
       </div>
+
+      <div class="vocab">
+        <div class="vocab-head">
+          <strong>My vocabulary</strong>
+          <label class="file-btn">Import JSON
+            <input id="vocab-file" type="file" accept="application/json,.json" hidden />
+          </label>
+        </div>
+        <p id="vocab-status" class="muted"></p>
+        <label class="check">
+          <input id="use-vocab" type="checkbox" disabled checked />
+          Weave my vocab into the conversation
+        </label>
+        <div id="vocab-levels" class="vocab-levels">
+          <span class="muted">Levels:</span>
+          <label class="check"><input id="vlev-A1" type="checkbox" checked /> A1</label>
+          <label class="check"><input id="vlev-A2" type="checkbox" checked /> A2</label>
+          <label class="check"><input id="vlev-B1" type="checkbox" checked /> B1</label>
+        </div>
+      </div>
+
       <button id="start" class="primary">Start</button>
     </section>
 
@@ -88,6 +109,8 @@
       <ol id="transcript" aria-live="polite"></ol>
 
       <div id="coach" class="card coach" hidden></div>
+
+      <div id="focus" class="focus" hidden aria-label="Vocabulary being practised"></div>
 
       <div id="suggestions" class="chips" aria-label="Things you could say"></div>
 
