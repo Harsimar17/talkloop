@@ -698,7 +698,6 @@ function startListening() {
     return;
   }
   stopSpeaking();
-  setAudioSession("auto");
   recognizer = new Recognition();
   recognizer.lang = state.settings.locale;
   recognizer.interimResults = true;
@@ -871,36 +870,19 @@ function voicesReady() {
 }
 
 let currentAudio = null;
-let currentSource = null;
 let currentHighlight = null;
 let speakToken = 0; // bumps on every speak/stop so a slow TTS reply can't play over a newer one
 
-// A single AudioContext, unlocked on the first user tap. Playing generated audio
-// through Web Audio is far more reliable than <audio> in Safari / on iPhone.
-let audioCtx = null;
-function getAudioCtx() {
-  if (!audioCtx) {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (AC) audioCtx = new AC();
-  }
-  return audioCtx;
-}
-
-// One shared <audio> element. On iPhone, speech recognition takes over the audio
-// session and suspends Web Audio; an element primed inside a tap can still play then.
+// All generated speech plays through this one <audio> element. Safari only lets audio
+// play after a network wait if a tap started it first, so the element is primed on the
+// first tap and reused: once unlocked it stays unlocked, also after the mic was used.
+// (Web Audio was dropped: on iPhone the mic, a route change or a call can leave an
+// AudioContext reporting "running" with its clock frozen, so a reply never played or
+// ended. It is also muted by the ring switch, which media playback is not, so the
+// audio session no longer has to be switched back and forth around every reply.)
 const player = new Audio();
 player.setAttribute("playsinline", "");
 let playerPrimed = false;
-
-// iOS 17+: route speech like media (plays with the ring switch on silent).
-// Listening switches it back to "auto" so the mic still works.
-function setAudioSession(type) {
-  try {
-    if (navigator.audioSession) navigator.audioSession.type = type;
-  } catch {
-    // unsupported value or browser; the default session still works
-  }
-}
 
 // Runs inside every user gesture so Safari lets audio play later, after network waits.
 let speechPrimed = false;
@@ -909,15 +891,6 @@ function unlockAudio() {
     playerPrimed = true;
     player.src = pcmToWavUrl(new Uint8Array(480)); // 10 ms of silence
     player.play().catch(() => { playerPrimed = false; });
-  }
-  const ctx = getAudioCtx();
-  if (ctx && ctx.state !== "running") {
-    ctx.resume().catch(() => {});
-    // Safari only truly unlocks once something is started inside the gesture.
-    const blip = ctx.createBufferSource();
-    blip.buffer = ctx.createBuffer(1, 1, 22050);
-    blip.connect(ctx.destination);
-    blip.start();
   }
   // Safari's speech synthesis also needs one gesture-initiated utterance.
   if (!speechPrimed && "speechSynthesis" in window) {
@@ -1013,10 +986,9 @@ async function speak(text, wordSpans, onDone, mood = "neutral") {
     if (token !== speakToken) return; // stopped or superseded while audio was generating
     noteVoice(wordSpans, note);
     setSpeaking(true);
-    playCloudAudio(audio.pcm, audio.sampleRate, wordSpans, finish, fallback);
+    playSpeech(audio.pcm, audio.sampleRate, wordSpans, finish, fallback);
   };
   noteVoice(wordSpans, "");
-  setAudioSession("playback");
 
   const cached = ttsCache.get(`${locale}|${mood}|${text}`);
   if (cached) return play(cached.audio, cached.note);
@@ -1076,127 +1048,38 @@ function startHighlight(wordSpans, elapsedFn, duration) {
   }, 80);
 }
 
-async function playCloudAudio(pcm, sampleRate, wordSpans, onDone, onFail) {
-  const token = speakToken;
-  const ctx = getAudioCtx();
-  if (!ctx) {
-    playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail);
-    return;
-  }
-  if (ctx.state !== "running") {
-    await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 300))]);
-    if (token !== speakToken) return;
-    // A still-suspended context (iPhone after the mic was used) would play silently
-    // and never end; try the primed <audio> element instead.
-    if (ctx.state !== "running") {
-      playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail);
-      return;
-    }
-  }
-
-  // 16-bit little-endian mono PCM -> AudioBuffer.
-  const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-  const samples = Math.floor(pcm.byteLength / 2);
-  const buffer = ctx.createBuffer(1, samples, sampleRate);
-  const channel = buffer.getChannelData(0);
-  for (let i = 0; i < samples; i++) channel[i] = view.getInt16(i * 2, true) / 32768;
-
-  const clear = () => {
-    if (currentHighlight) { clearInterval(currentHighlight); currentHighlight = null; }
-    wordSpans.forEach((span) => span.classList.remove("speaking"));
-  };
-  const src = ctx.createBufferSource();
-  src.buffer = buffer;
-  src.connect(ctx.destination);
-  currentSource = src;
-  const startedAt = ctx.currentTime;
-  currentHighlight = startHighlight(wordSpans, () => ctx.currentTime - startedAt, buffer.duration);
-  let settled = false;
-  let stallTimer = null;
-  let deadline = null;
-  const end = () => {
-    if (settled) return false;
-    settled = true;
-    clearTimeout(stallTimer);
-    clearTimeout(deadline);
-    src.onended = null;
-    currentSource = null;
-    clear();
-    return true;
-  };
-  src.onended = () => { if (end()) onDone(); };
-  try {
-    src.start();
-  } catch (error) {
-    if (end()) onFail(error.message);
-    return;
-  }
-  // iOS can report the context as running while its clock is frozen (after the mic or
-  // another app took the audio session): nothing is heard, onended never comes, and the
-  // call would sit on "Speaking…" for good. If the clock hasn't moved, drop the context
-  // (the next tap unlocks a fresh one) and play through the <audio> element instead.
-  stallTimer = setTimeout(() => {
-    if (token !== speakToken || ctx.currentTime - startedAt > 0.1 || !end()) return;
-    try { src.stop(); } catch { /* never started */ }
-    discardAudioCtx();
-    playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail);
-  }, 1500);
-  // And never wait long past the end for an onended that doesn't come.
-  deadline = setTimeout(() => {
-    if (token !== speakToken || !end()) return;
-    try { src.stop(); } catch { /* already stopped */ }
-    onDone();
-  }, (buffer.duration + 2) * 1000);
-}
-
-// Forget a context that stopped working; getAudioCtx makes a new one, which the next tap unlocks.
-function discardAudioCtx() {
-  try { audioCtx?.close().catch(() => {}); } catch { /* already closed */ }
-  audioCtx = null;
-}
-
-// Plays through the shared <audio> element, for browsers without Web Audio or
-// when the AudioContext is suspended.
-function playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail) {
+// Play 16-bit PCM through the primed <audio> element, highlighting words as it goes.
+// onFail (the browser voice) runs if the element refuses to play.
+function playSpeech(pcm, sampleRate, wordSpans, onDone, onFail) {
   const token = speakToken;
   const url = pcmToWavUrl(pcm, sampleRate);
+  const duration = pcm.byteLength / 2 / sampleRate;
   const audio = player;
-  audio.src = url;
+  if (audio.src.startsWith("blob:")) URL.revokeObjectURL(audio.src); // an interrupted reply's audio
   currentAudio = audio;
-  audio.ontimeupdate = () => {
-    if (!audio.duration || !wordSpans.length) return;
-    const i = Math.min(wordSpans.length - 1, Math.floor((audio.currentTime / audio.duration) * wordSpans.length));
-    wordSpans.forEach((span, idx) => span.classList.toggle("speaking", idx === i));
-  };
   let settled = false;
-  let stallTimer = null;
-  let deadline = null;
   const end = (ok, reason) => {
     if (settled) return;
     settled = true;
-    clearTimeout(stallTimer);
-    clearTimeout(deadline);
-    audio.onended = audio.onerror = audio.ontimeupdate = null;
-    wordSpans.forEach((span) => span.classList.remove("speaking"));
     URL.revokeObjectURL(url);
+    // Stopped or replaced (e.g. its play() rejects only after Replay started the next one):
+    // the player and the highlight belong to the newer reply now, so leave them alone.
+    if (token !== speakToken) return;
+    if (currentHighlight) { clearInterval(currentHighlight); currentHighlight = null; }
+    audio.onended = audio.onerror = null;
+    wordSpans.forEach((span) => span.classList.remove("speaking"));
     if (ok) onDone();
     else onFail(reason);
   };
   audio.onended = () => end(true);
   audio.onerror = () => end(false, "audio could not be played");
-  audio.play().catch((error) => end(false, error.message));
-  // Same guards as the Web Audio path: playback that never gets going, or never reports
-  // its end, must not leave the call stuck on "Speaking…".
-  stallTimer = setTimeout(() => {
-    if (token !== speakToken || audio.currentTime > 0.1) return;
-    audio.pause();
-    end(false, "the audio didn't start");
-  }, 2000);
-  deadline = setTimeout(() => {
-    if (token !== speakToken) return;
-    audio.pause();
-    end(true);
-  }, (pcm.byteLength / 2 / sampleRate + 3) * 1000);
+  audio.src = url;
+  audio.play().then(
+    () => {
+      if (token === speakToken && !settled) currentHighlight = startHighlight(wordSpans, () => audio.currentTime, duration);
+    },
+    (error) => end(false, error.message),
+  );
 }
 
 async function browserSpeak(text, rate, wordSpans, onDone) {
@@ -1220,35 +1103,13 @@ async function browserSpeak(text, rate, wordSpans, onDone) {
       event.charIndex >= Number(span.dataset.start) && event.charIndex < Number(span.dataset.end),
     ));
   };
-  let started = false;
-  let settled = false;
-  let startTimer = null;
-  let deadline = null;
   const clear = () => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(startTimer);
-    clearTimeout(deadline);
     wordSpans.forEach((span) => span.classList.remove("speaking"));
     if (typeof onDone === "function") onDone();
   };
-  utterance.onstart = () => { started = true; };
   utterance.onend = clear;
   utterance.onerror = clear;
   speechSynthesis.speak(utterance);
-  // iOS's speech engine sometimes never starts, or never reports the end: this is the
-  // last voice to try, so say so and let the call carry on instead of hanging.
-  startTimer = setTimeout(() => {
-    if (started || token !== speakToken) return;
-    speechSynthesis.cancel();
-    noteVoice(wordSpans, "The voice didn't play. Tap ▶ Replay to hear it.");
-    clear();
-  }, 4000);
-  deadline = setTimeout(() => {
-    if (token !== speakToken) return;
-    speechSynthesis.cancel();
-    clear();
-  }, ((text.length * 0.12) / rate + 5) * 1000);
 }
 
 function stopSpeaking() {
@@ -1256,16 +1117,14 @@ function stopSpeaking() {
   setSpeaking(false);
   if (currentHighlight) { clearInterval(currentHighlight); currentHighlight = null; }
   document.querySelectorAll(".word.speaking").forEach((span) => span.classList.remove("speaking"));
-  if (currentSource) {
-    try { currentSource.onended = null; currentSource.stop(); } catch { /* already stopped */ }
-    currentSource = null;
-  }
   if (currentAudio) {
-    currentAudio.onended = currentAudio.onerror = currentAudio.ontimeupdate = null;
+    currentAudio.onended = currentAudio.onerror = null;
     currentAudio.pause();
     currentAudio = null;
   }
-  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  // Only when the browser voice is in use: on iOS, cancelling the speech engine for
+  // nothing still churns the audio session the reply is about to play through.
+  if ("speechSynthesis" in window && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
 }
 
 // ---------- transcript rendering ----------
