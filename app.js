@@ -1804,6 +1804,16 @@ $("composer").addEventListener("submit", (event) => {
   sendTurn(text);
 });
 
+// On phones the on-screen keyboard covers half the screen, so while the text box is
+// focused mark the body "typing": the CSS then folds away the big round call controls
+// and the vocab row, leaving the input and transcript usable. Keep the latest message
+// in view above the keyboard.
+$("text").addEventListener("focus", () => {
+  document.body.classList.add("typing");
+  scrollCallToBottom();
+});
+$("text").addEventListener("blur", () => document.body.classList.remove("typing"));
+
 $("mic").addEventListener("click", () => {
   if (state.handsFree || $("mic").getAttribute("aria-pressed") === "true") {
     stopListening();

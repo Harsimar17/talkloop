@@ -252,6 +252,11 @@ body.in-call { overflow: hidden; }
   .msg { max-width: 92%; }
   .call-scroll { padding: 12px; }
   .call-dock { padding-left: 12px; padding-right: 12px; }
+  /* While typing, the keyboard is up: fold away the big round controls and the vocab
+     row so the input sits right above the keyboard with the transcript still visible. */
+  body.typing .call-controls,
+  body.typing .call-dock .focus { display: none; }
+  body.typing .call-dock { gap: 6px; }
   /* Word explorer becomes a bottom sheet so it never covers the composer awkwardly */
   .explorer {
     left: 0; right: 0; bottom: 0; width: 100%;
