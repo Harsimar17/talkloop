@@ -1806,8 +1806,7 @@ $("mode").addEventListener("change", () => {
 
 $("language").addEventListener("change", preloadSelectedVoice);
 
-$("composer").addEventListener("submit", (event) => {
-  event.preventDefault();
+function submitComposer() {
   // A reply is still loading (or the call is finished/on hold): keep what's typed.
   if (state.busy || state.finished || state.paused) return;
   const text = $("text").value.trim();
@@ -1819,6 +1818,12 @@ $("composer").addEventListener("submit", (event) => {
   }
   stopSpeaking();
   sendTurn(text);
+}
+
+// Submitting via Enter or the native button click (desktop).
+$("composer").addEventListener("submit", (event) => {
+  event.preventDefault();
+  submitComposer();
 });
 
 // On phones the on-screen keyboard covers half the screen, so while the text box is
@@ -1831,12 +1836,18 @@ $("text").addEventListener("focus", () => {
 });
 $("text").addEventListener("blur", () => document.body.classList.remove("typing"));
 
-// Tapping Send must not blur the text box first. On phones, blurring dismisses the
-// keyboard and reflows the dock mid-tap, so the first tap is swallowed closing the
-// keyboard and you'd have to press Send twice. Preventing the button's mousedown
-// default keeps focus on the input, so the first tap submits (the input blurs a moment
-// later when it's disabled while the reply loads).
-$("composer").querySelector("button[type='submit']").addEventListener("mousedown", (event) => event.preventDefault());
+// Tapping Send must not blur the text box, or the on-screen keyboard drops and you'd
+// have to tap the box again for every turn. iOS decides to dismiss the keyboard at the
+// touch level, before any mouse/click event, so handle the tap on touchend and prevent
+// its default: that keeps focus (keyboard stays up) and cancels the synthesized click,
+// so the form's submit doesn't also fire. On desktop (no touch) the native click submits,
+// and preventing mousedown keeps focus there too.
+const sendBtn = $("composer").querySelector("button[type='submit']");
+sendBtn.addEventListener("mousedown", (event) => event.preventDefault());
+sendBtn.addEventListener("touchend", (event) => {
+  event.preventDefault();
+  submitComposer();
+});
 
 $("mic").addEventListener("click", () => {
   if (state.handsFree || $("mic").getAttribute("aria-pressed") === "true") {
