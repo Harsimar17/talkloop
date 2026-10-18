@@ -1293,10 +1293,36 @@ function renderCoach(coach) {
   }
 }
 
-// Put a suggestion into the text box, ready to edit or send, keeping the caret at the end.
+// Run handler on a tap without taking focus from the text box. A button would otherwise
+// blur it, and on phones that drops the keyboard and reflows the dock mid-tap. iOS decides
+// that at the touch level, so the tap is handled on touchend with its default prevented
+// (which also cancels the synthesized click). A touch that moved is a scroll of the chip
+// row, not a tap. click covers mouse and keyboard activation, unless the button submits
+// the form, whose submit handler covers those instead.
+function onTap(el, handler, { click = true } = {}) {
+  let start = null;
+  el.addEventListener("mousedown", (event) => event.preventDefault());
+  el.addEventListener("touchstart", (event) => {
+    const t = event.touches[0];
+    start = { x: t.clientX, y: t.clientY };
+  }, { passive: true });
+  el.addEventListener("touchend", (event) => {
+    const t = event.changedTouches[0];
+    const moved = !start || Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10;
+    start = null;
+    if (moved) return;
+    event.preventDefault();
+    handler();
+  });
+  if (click) el.addEventListener("click", handler);
+}
+
+// Put a suggestion into the text box, ready to edit or send, with the caret at the end.
+// The keyboard is only kept up if it already was: a suggestion never pops it open.
 function useSuggestion(text) {
   const input = $("text");
   input.value = text;
+  if (!document.body.classList.contains("typing")) return;
   input.focus();
   try { input.setSelectionRange(text.length, text.length); } catch { /* unsupported */ }
 }
@@ -1308,15 +1334,7 @@ function renderSuggestions(suggestions) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.textContent = text;
-    // Like Send: a tap on a chip must not blur the text box, or the keyboard drops and
-    // the dock collapses before the text lands. Handle the tap on touchend and prevent
-    // its default (keeps focus / keyboard, cancels the duplicate click); desktop uses click.
-    chip.addEventListener("mousedown", (event) => event.preventDefault());
-    chip.addEventListener("touchend", (event) => {
-      event.preventDefault();
-      useSuggestion(text);
-    });
-    chip.addEventListener("click", () => useSuggestion(text));
+    onTap(chip, () => useSuggestion(text));
     box.append(chip);
   }
 }
@@ -1842,25 +1860,30 @@ $("composer").addEventListener("submit", (event) => {
 // On phones the on-screen keyboard covers half the screen, so while the text box is
 // focused mark the body "typing": the CSS then folds away the big round call controls
 // and the vocab row, leaving the input and transcript usable. Keep the latest message
-// in view above the keyboard.
+// in view above the keyboard. The layout only goes back once the box has stayed blurred
+// for a moment, so a brief blur during a tap can't reflow the dock and move the Send
+// button out from under the finger.
+let typingTimer = null;
 $("text").addEventListener("focus", () => {
+  clearTimeout(typingTimer);
   document.body.classList.add("typing");
   scrollCallToBottom();
 });
-$("text").addEventListener("blur", () => document.body.classList.remove("typing"));
-
-// Tapping Send must not blur the text box, or the on-screen keyboard drops and you'd
-// have to tap the box again for every turn. iOS decides to dismiss the keyboard at the
-// touch level, before any mouse/click event, so handle the tap on touchend and prevent
-// its default: that keeps focus (keyboard stays up) and cancels the synthesized click,
-// so the form's submit doesn't also fire. On desktop (no touch) the native click submits,
-// and preventing mousedown keeps focus there too.
-const sendBtn = $("composer").querySelector("button[type='submit']");
-sendBtn.addEventListener("mousedown", (event) => event.preventDefault());
-sendBtn.addEventListener("touchend", (event) => {
-  event.preventDefault();
-  submitComposer();
+$("text").addEventListener("blur", () => {
+  clearTimeout(typingTimer);
+  typingTimer = setTimeout(() => {
+    if (document.activeElement !== $("text")) document.body.classList.remove("typing");
+  }, 300);
 });
+
+// Send without dropping the keyboard (see onTap), so you can type the next turn straight
+// away. If the browser blurred the box anyway, focusing it again inside the tap keeps
+// the keyboard up. Mouse clicks and Enter go through the form's submit handler.
+onTap($("composer").querySelector("button[type='submit']"), () => {
+  const keepKeyboard = document.body.classList.contains("typing");
+  submitComposer();
+  if (keepKeyboard) $("text").focus();
+}, { click: false });
 
 $("mic").addEventListener("click", () => {
   if (state.handsFree || $("mic").getAttribute("aria-pressed") === "true") {
