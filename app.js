@@ -1201,7 +1201,7 @@ function wordify(container, text, sentence) {
       span.textContent = chunk;
       span.dataset.start = String(match.index);
       span.dataset.end = String(match.index + chunk.length);
-      span.addEventListener("click", () => openExplorer(chunk, sentence));
+      onTap(span, () => openExplorer(chunk, sentence), { selectable: true });
       container.append(span);
       spans.push(span);
     } else {
@@ -1229,10 +1229,11 @@ function addCharacterMessage(turn) {
   tools.className = "tools";
   const replay = document.createElement("button");
   replay.textContent = "▶ Replay";
-  replay.addEventListener("click", () => speak(turn.reply, spans, null, turn.mood));
+  // onTap so these work mid-typing without dropping the keyboard.
+  onTap(replay, () => speak(turn.reply, spans, null, turn.mood));
   const translate = document.createElement("button");
   translate.textContent = "Translate";
-  translate.addEventListener("click", () => {
+  onTap(translate, () => {
     translation.hidden = !translation.hidden;
   });
   tools.append(replay, translate);
@@ -1296,21 +1297,22 @@ function renderCoach(coach) {
 // Run handler on a tap without taking focus from the text box. A button would otherwise
 // blur it, and on phones that drops the keyboard and reflows the dock mid-tap. iOS decides
 // that at the touch level, so the tap is handled on touchend with its default prevented
-// (which also cancels the synthesized click). A touch that moved is a scroll of the chip
-// row, not a tap. click covers mouse and keyboard activation, unless the button submits
-// the form, whose submit handler covers those instead.
-function onTap(el, handler, { click = true } = {}) {
+// (which also cancels the synthesized click). A touch that moved is a scroll (of the chip
+// row or the transcript) and a long press is text selection, so neither counts as a tap.
+// click covers mouse and keyboard activation, unless the button submits the form, whose
+// submit handler covers those instead. selectable keeps text selectable with the mouse.
+function onTap(el, handler, { click = true, selectable = false } = {}) {
   let start = null;
-  el.addEventListener("mousedown", (event) => event.preventDefault());
+  if (!selectable) el.addEventListener("mousedown", (event) => event.preventDefault());
   el.addEventListener("touchstart", (event) => {
     const t = event.touches[0];
-    start = { x: t.clientX, y: t.clientY };
+    start = { x: t.clientX, y: t.clientY, at: Date.now() };
   }, { passive: true });
   el.addEventListener("touchend", (event) => {
     const t = event.changedTouches[0];
-    const moved = !start || Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10;
+    const tap = start && Math.hypot(t.clientX - start.x, t.clientY - start.y) <= 10 && Date.now() - start.at < 500;
     start = null;
-    if (moved) return;
+    if (!tap) return;
     event.preventDefault();
     handler();
   });
@@ -1588,10 +1590,11 @@ async function openExplorer(word, sentence) {
     actions.className = "tools";
     const listen = document.createElement("button");
     listen.textContent = "▶ Listen";
-    listen.addEventListener("click", () => speak(info.word, []));
+    onTap(listen, () => speak(info.word, []));
     const save = document.createElement("button");
     save.textContent = "★ Save word";
-    save.addEventListener("click", () => {
+    onTap(save, () => {
+      if (save.disabled) return; // touch events can still reach a disabled button
       saveBookmark(info);
       save.textContent = "Saved";
       save.disabled = true;
@@ -1896,7 +1899,7 @@ $("mic").addEventListener("click", () => {
 
 $("pause").addEventListener("click", () => setPaused(!state.paused));
 
-$("explorer-close").addEventListener("click", () => {
+onTap($("explorer-close"), () => {
   $("explorer").hidden = true;
 });
 

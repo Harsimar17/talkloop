@@ -263,10 +263,14 @@ body.in-call { overflow: hidden; }
   body.typing .call-dock .focus { display: none; }
   body.typing .call-dock { gap: 6px; }
   /* Word explorer becomes a bottom sheet so it never covers the composer awkwardly */
+  /* Its bottom edge follows the visible area (see --vvh/--vvtop in app.js), so with the
+     keyboard up the sheet sits just above it instead of hiding behind it. */
   .explorer {
-    left: 0; right: 0; bottom: 0; width: 100%;
+    left: 0; right: 0; bottom: auto; width: 100%;
+    top: calc(var(--vvtop, 0px) + var(--vvh, 100dvh));
+    transform: translateY(-100%);
     border-radius: 14px 14px 0 0;
-    max-height: 70vh; overflow-y: auto;
+    max-height: calc(var(--vvh, 100dvh) * 0.7); overflow-y: auto;
   }
 }
 #keygate label { margin-bottom: 12px; }
