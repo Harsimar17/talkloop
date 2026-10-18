@@ -8,7 +8,7 @@
     <link rel="apple-touch-icon" href="favicon.svg" />
     <meta name="theme-color" content="#2f5fd0" />
     <!-- ?v= makes phones fetch the new file after a change instead of a cached copy: bump it with each change. -->
-    <link rel="stylesheet" href="styles.css?v=4" />
+    <link rel="stylesheet" href="styles.css?v=6" />
   </head>
   <body>
     <header class="topbar">
@@ -156,6 +156,11 @@
         </label>
       </div>
 
+      <label class="check say-again">
+        <input id="say-again" type="checkbox" checked />
+        After a correction, say the corrected sentence before the conversation moves on
+      </label>
+
       <button id="start" class="primary">Start</button>
     </section>
 
@@ -178,6 +183,17 @@
 
       <footer class="call-dock">
         <div id="focus" class="focus" hidden aria-label="Vocabulary being practised"></div>
+        <!-- Say it again: after a correction, the corrected sentence is said before the reply comes. -->
+        <div id="drill" class="drill" hidden aria-live="polite">
+          <p class="drill-label">Say it correctly:</p>
+          <p id="drill-target" class="drill-target"></p>
+          <p id="drill-feedback" class="drill-feedback"></p>
+          <div class="drill-actions">
+            <button type="button" id="drill-say" class="primary">🎤 Say it</button>
+            <button type="button" id="drill-hear">▶ Hear it</button>
+            <button type="button" id="drill-skip">Skip</button>
+          </div>
+        </div>
         <div id="suggestions" class="chips" aria-label="Things you could say"></div>
         <div id="live" class="live" aria-live="polite"></div>
         <p id="status" class="status"></p>
@@ -208,10 +224,19 @@
     </aside>
 
     <section class="card">
+      <div class="card-head">
+        <h2>Your recurring mistakes</h2>
+        <button type="button" id="reset-mistakes" hidden>Reset</button>
+      </div>
+      <ul id="mistakes" class="bookmarks"></ul>
+      <p id="mistakes-sync" class="muted mistakes-sync"></p>
+    </section>
+
+    <section class="card">
       <h2>Saved words</h2>
       <ul id="bookmarks" class="bookmarks"></ul>
     </section>
 
-    <script src="app.js?v=8" type="module"></script> <!-- bump with app.js changes, like styles.css above -->
+    <script src="app.js?v=10" type="module"></script> <!-- bump with app.js changes, like styles.css above -->
   </body>
 </html>

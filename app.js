@@ -12,6 +12,7 @@ const state = {
   handsFree: false, // when true, the mic listens, auto-sends on a pause, and resumes after each reply
   speaking: false,
   paused: false, // call on hold: no voice, no mic, timer stopped
+  drill: null, // { target, said, turn } while the learner says a correction again before the reply
 };
 
 const SILENCE_MS = 2500; // how long a pause ends your turn in hands-free mode
@@ -418,6 +419,105 @@ function nextVocabBatch(n = 12) {
   return batch;
 }
 
+// ---------- mistake tracker ----------
+// Every correction is tagged with the kinds of mistake it fixes. The tags are kept per
+// language in this browser, and the ones that keep coming back go into the prompt so the
+// partner sets up sentences that test them: spaced repetition of the learner's own errors.
+const MISTAKE_TYPES = {
+  case_article: "articles and case (der/den/dem, ein/einen, noun gender)",
+  verb_position: "verb position (verb second; verb at the end after weil, dass, wenn)",
+  perfekt_auxiliary: "Perfekt auxiliary (haben or sein)",
+  participle: "past participle form (gegessen, gegangen, gekauft)",
+  separable_verb: "separable verbs (aufstehen: ich stehe früh auf)",
+  verb_ending: "verb endings (ich habe, du hast, er hat)",
+  adjective_ending: "adjective endings (ein guter Kaffee, mit dem neuen Auto)",
+  preposition: "prepositions (in, auf, zu, nach, mit …)",
+  negation: "negation (nicht or kein)",
+  plural: "plural forms",
+  word_choice: "word choice",
+  other: "other",
+};
+const MISTAKE_HALF_LIFE_DAYS = 7; // a mistake counts half as much a week later
+
+function recordMistakes(language, types, said, fix) {
+  const log = store.get("mistakes", {});
+  const at = Date.now();
+  log[language] = [...(log[language] ?? []), ...types.map((type) => ({ type, at, said, fix }))].slice(-300);
+  store.set("mistakes", log);
+}
+
+// Mistake types by how much they still matter: each mistake counts less as it ages, so one
+// you stopped making fades out and one that keeps coming back stays on top.
+function rankedMistakes(language) {
+  const now = Date.now();
+  const byType = new Map();
+  for (const m of store.get("mistakes", {})[language] ?? []) {
+    const t = byType.get(m.type) ?? { type: m.type, count: 0, weight: 0, example: m };
+    t.count++;
+    t.weight += 0.5 ** ((now - m.at) / 86_400_000 / MISTAKE_HALF_LIFE_DAYS);
+    t.example = m; // the log is oldest first, so this ends on the newest
+    byType.set(m.type, t);
+  }
+  return [...byType.values()].filter((t) => MISTAKE_TYPES[t.type]).sort((a, b) => b.weight - a.weight);
+}
+
+// The top 3 that recur (made at least twice), which the partner deliberately tests.
+function recurringMistakes(language) {
+  return rankedMistakes(language).filter((t) => t.count >= 2 && t.type !== "other").slice(0, 3);
+}
+
+// ---------- mistake log sync ----------
+// With the Vocab Trainer linked, the log follows the learner across devices: the trainer
+// keeps the merged log of all of them. Syncs run only when the app opens, when a call ends
+// and when the page is left, and nothing ever waits for one: the prompt always reads the
+// log on this device, so a slow or sleeping trainer can't delay a reply or a call.
+let mistakeSync = null; // the sync in flight, if any
+
+function syncMistakes({ keepalive = false } = {}) {
+  const link = trainerLink();
+  if (!link || mistakeSync) return;
+  const startedAt = Date.now();
+  const since = store.get("mistakes_synced_at", 0);
+  const log = store.get("mistakes", {});
+  const resets = store.get("mistake_resets", {});
+  // Only what this device recorded since its last sync, plus its reset times.
+  const languages = {};
+  for (const language of new Set([...Object.keys(log), ...Object.keys(resets)])) {
+    languages[language] = { resetAt: resets[language] ?? 0, entries: (log[language] ?? []).filter((m) => m.at >= since) };
+  }
+  const body = JSON.stringify({ languages });
+  mistakeSync = fetch(`${link.api}/api/talkloop/mistakes`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${link.token}`, "Content-Type": "application/json" },
+    body,
+    keepalive: keepalive && body.length < 60_000, // a page being left may still send it (64 KB limit)
+  })
+    .then(async (res) => {
+      if (!res.ok) return; // e.g. an expired link: refreshLearntWords tells the learner
+      mergeMistakes((await res.json()).languages ?? {}, startedAt);
+      store.set("mistakes_synced_at", startedAt);
+      renderMistakes();
+    })
+    .catch(() => {}) // offline or asleep: what wasn't sent goes next time
+    .finally(() => { mistakeSync = null; });
+}
+
+// The trainer's merged log replaces this device's, keeping anything recorded here while
+// the sync was under way (it goes up with the next one).
+function mergeMistakes(merged, startedAt) {
+  const local = store.get("mistakes", {});
+  const resets = store.get("mistake_resets", {});
+  const log = { ...local };
+  for (const [language, { resetAt = 0, entries = [] }] of Object.entries(merged)) {
+    resets[language] = Math.max(resets[language] ?? 0, resetAt);
+    const seen = new Set(entries.map((m) => `${m.at}|${m.type}|${m.said}`));
+    const late = (local[language] ?? []).filter((m) => m.at >= startedAt && !seen.has(`${m.at}|${m.type}|${m.said}`));
+    log[language] = [...entries, ...late].filter((m) => m.at > resets[language]).sort((a, b) => a.at - b.at).slice(-300);
+  }
+  store.set("mistake_resets", resets);
+  store.set("mistakes", log);
+}
+
 // The model writes these fields in this order, so coach comes first: it judges the
 // learner's message before writing its own reply and suggestions, whose words it would
 // otherwise credit to the learner. (Gemini needs propertyOrdering for that; the JSON
@@ -427,9 +527,14 @@ const TURN_SCHEMA = {
   properties: {
     coach: {
       type: "OBJECT",
-      properties: { understood: { type: "BOOLEAN" }, correction: { type: "STRING" }, tip: { type: "STRING" } },
-      required: ["understood", "correction", "tip"],
-      propertyOrdering: ["understood", "correction", "tip"],
+      properties: {
+        understood: { type: "BOOLEAN" },
+        correction: { type: "STRING" },
+        mistakes: { type: "ARRAY", items: { type: "STRING", enum: Object.keys(MISTAKE_TYPES) } },
+        tip: { type: "STRING" },
+      },
+      required: ["understood", "correction", "mistakes", "tip"],
+      propertyOrdering: ["understood", "correction", "mistakes", "tip"],
     },
     reply: { type: "STRING" },
     reply_translation: { type: "STRING" },
@@ -461,7 +566,7 @@ function personaFor({ scenario, mode }) {
   return m.usesScene ? SCENARIOS[scenario] ?? SCENARIOS.cafe : PARTNER;
 }
 
-function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, tense }, targetWords = [], learnt = false, learnerMessage = "") {
+function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, tense }, targetWords = [], learnt = false, learnerMessage = "", weakSpots = []) {
   const m = MODES[mode] ?? MODES.scene;
   const persona = personaFor({ scenario, mode });
   const lines = [
@@ -473,8 +578,8 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, ten
     "Speech recognition produced the learner's message, so ignore missing punctuation and obvious transcription slips.",
     `Write reply_translation, coach.tip and nothing else in ${nativeLanguage}.`,
     learnerMessage
-      ? `Fill coach first, before writing your reply. It judges only the learner's last message, which is exactly: ${JSON.stringify(learnerMessage)}. Give a correction only when that text has a real grammar or word-choice mistake. coach.tip may praise or explain something that literally appears in that text; never credit the learner with words, tenses or grammar that are not in it, such as those in your own replies, your suggestions or practice words they did not use. If there is nothing useful to say, leave coach.tip empty.`
-      : "There is no learner message to judge yet: leave coach.correction and coach.tip empty.",
+      ? `Fill coach first, before writing your reply. It judges only the learner's last message, which is exactly: ${JSON.stringify(learnerMessage)}. Give a correction only when that text has a real grammar or word-choice mistake; coach.correction is then only the sentence(s) with the mistake, rewritten correctly in ${language}, with no explanation (that goes in coach.tip). With every correction, list in coach.mistakes each kind of mistake it fixes: ${Object.entries(MISTAKE_TYPES).map(([k, d]) => `${k} = ${d}`).join("; ")}. Without a correction, leave coach.mistakes empty. coach.tip may praise or explain something that literally appears in that text; never credit the learner with words, tenses or grammar that are not in it, such as those in your own replies, your suggestions or practice words they did not use. If there is nothing useful to say, leave coach.tip empty.`
+      : "There is no learner message to judge yet: leave coach.correction, coach.mistakes and coach.tip empty.",
     "Your reply is read aloud, so let your feelings show in the words: react like a real person with short interjections (for example Oh!, Ach wirklich?, Super!, Oh nein!) and use ! and ? where you mean them.",
     `Set mood to how the reply should sound: ${MOODS.join(", ")}. Use amused for fun or happy replies, surprised for amazement, angry only when the role calls for annoyance, sleepy for tiredness, whisper for secrets, and neutral otherwise.`,
   ];
@@ -497,6 +602,14 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, ten
     const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
     lines.push(
       `The learner is practising this vocabulary. Naturally weave two to four of these words or phrases into your reply where they fit — do not force all of them, keep it natural, and give the learner a chance to use them too: ${list}.`,
+    );
+  }
+  if (weakSpots.length) {
+    const clip = (t) => JSON.stringify(t.length > 120 ? `${t.slice(0, 117)}…` : t);
+    const list = weakSpots.map((m) => `${MISTAKE_TYPES[m.type]} (recently they said ${clip(m.example.said)}; correct: ${clip(m.example.fix)})`).join("; ");
+    lines.push(
+      `The learner keeps making these mistakes, most frequent first: ${list}.`,
+      "Deliberately set up chances to get them right: about every second question, ask something whose natural answer needs one of these structures, taking them in turn. Stay natural and in your role, never say that you are testing them, and don't explain grammar in your reply; the coach handles corrections.",
     );
   }
   return lines.join("\n");
@@ -606,7 +719,7 @@ async function chatTurn(settings, history, message) {
   const learnt = Boolean(settings.vocab?.learnt);
   const targetWords = settings.vocab?.enabled ? nextVocabBatch(learnt ? 8 : 12) : [];
   const turn = await aiJson({
-    systemInstruction: turnSystemPrompt(settings.request, targetWords, learnt, message.trim()),
+    systemInstruction: turnSystemPrompt(settings.request, targetWords, learnt, message.trim(), recurringMistakes(settings.request.language)),
     schema: TURN_SCHEMA,
     contents: historyToContents(history, userText),
   });
@@ -699,6 +812,7 @@ async function geminiTts(text) {
 // ---------- speech recognition (browser) ----------
 const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
 let recognizer = null;
+let dropNextResult = false; // set when listening is cut short on purpose, so its result is ignored
 
 function startListening() {
   if (!Recognition) {
@@ -741,10 +855,16 @@ function startListening() {
     setMic(false);
     $("live").textContent = "";
     const spoken = finalText.trim();
-    if (state.paused) {
+    if (dropNextResult) {
+      dropNextResult = false; // cut short on purpose (e.g. "Hear it" or Skip in a drill)
+    } else if (state.paused) {
       // Paused mid-sentence: drop it rather than sending half a thought.
     } else if (isPauseCommand(spoken)) {
       setPaused(true, { byVoice: true });
+    } else if (state.drill && spoken) {
+      // Saying the corrected sentence: check it; hands-free listens again after a miss.
+      if (isSkipCommand(spoken)) endDrill();
+      else if (!checkDrill(spoken)) maybeResumeListening();
     } else if (spoken) {
       // Hands-free: send straight away. Listening resumes after the reply is spoken.
       sendTurn(spoken);
@@ -1373,6 +1493,7 @@ function updateCallState() {
   else if (state.busy) { key = "thinking"; text = "Thinking…"; }
   else if (state.speaking) { key = "speaking"; text = "Speaking…"; }
   else if (recognizer) { key = "listening"; text = "Listening…"; }
+  else if (state.drill) { key = "drill"; text = "Say it again"; }
   $("conversation").dataset.state = key;
   $("call-state").textContent = text;
 }
@@ -1501,26 +1622,134 @@ async function sendTurn(message) {
     state.history.push({ role: "assistant", content: turn.reply });
 
     state.rapport = Math.max(0, state.rapport + Math.max(-2, Math.min(2, turn.rapport_delta)));
-    addCharacterMessage(turn);
-    if (message) renderCoach(turn.coach);
-    renderSuggestions(turn.suggestions);
-    renderFocusWords(turn.focusWords);
     renderStats();
-
-    if (turn.conversation_finished) {
-      state.finished = true;
-      renderSuggestions([]);
-      state.handsFree = false;
-      setStatus("Scene complete! Tap End to start another.");
-    } else if (!state.paused) {
-      setStatus("");
+    if (message) {
+      renderCoach(turn.coach);
+      if (turn.coach?.correction) {
+        const types = (turn.coach.mistakes ?? []).filter((t) => MISTAKE_TYPES[t]);
+        recordMistakes(state.settings.request.language, types.length ? [...new Set(types)] : ["other"], message, turn.coach.correction);
+        renderMistakes();
+      }
     }
+    if (!state.paused) setStatus("");
+    // After a correction the reply waits until the learner has said the fix.
+    if (message && state.settings.sayAgain && drillable(turn.coach?.correction, message)) startDrill(turn, message);
+    else presentReply(turn);
   } catch (error) {
     setStatus(error.message);
   } finally {
     clearTimeout(slowHint);
     setBusy(false);
   }
+}
+
+// The character's reply, its suggestions and focus words, and the end of a finished scene.
+function presentReply(turn) {
+  addCharacterMessage(turn);
+  renderSuggestions(turn.suggestions);
+  renderFocusWords(turn.focusWords);
+  if (turn.conversation_finished) {
+    state.finished = true;
+    renderSuggestions([]);
+    state.handsFree = false;
+    setStatus("Scene complete! Tap End to start another.");
+    setBusy(false);
+  }
+}
+
+// ---------- say it again ----------
+// After a correction the conversation waits: the learner says the corrected sentence (speech
+// recognition checks it), or skips, before the reply comes. Reading a correction is passive;
+// saying it is what makes it stick.
+const drillWords = (text) => normalizeSpeech(text.replace(/ß/g, "ss")).split(" ").filter(Boolean);
+
+function editDistance(a, b, same = (x, y) => x === y) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (same(a[i - 1], b[j - 1]) ? 0 : 1));
+    }
+    prev = row;
+  }
+  return prev[b.length];
+}
+
+// Speech recognition mishears a little, so long words may be one letter off.
+const sameWord = (x, y) => x === y || (Math.min(x.length, y.length) >= 6 && editDistance([...x], [...y]) <= 1);
+const similarity = (a, b, same = sameWord) => 1 - editDistance(a, b, same) / Math.max(a.length, b.length, 1);
+
+// Worth drilling: a real change from what was said, short enough to say in one go.
+function drillable(correction, said) {
+  const fix = drillWords(correction ?? "");
+  return fix.length > 0 && fix.length <= 30 && fix.join(" ") !== drillWords(said).join(" ");
+}
+
+// Did the attempt say the corrected sentence? It must contain, exactly, every word the
+// correction changed, be close to the correction (most words, in order; this also catches
+// word-order fixes), and be closer to it than to the original mistake word for word (no
+// allowance for mishearing there, or "Brüder" would count as the "Bruder" it corrects).
+function drillMatch(attempt, target, said) {
+  const a = drillWords(attempt);
+  const t = drillWords(target);
+  const s = drillWords(said);
+  const pool = new Map();
+  for (const w of s) pool.set(w, (pool.get(w) ?? 0) + 1);
+  const changed = t.filter((w) => {
+    const n = pool.get(w) ?? 0;
+    pool.set(w, n - 1);
+    return n <= 0;
+  });
+  const missing = [...new Set(changed.filter((w) => !a.includes(w)))];
+  const close = similarity(a, t);
+  return { ok: !missing.length && close >= 0.75 && close > similarity(a, s, (x, y) => x === y), missing };
+}
+
+function startDrill(turn, said) {
+  state.drill = { target: turn.coach.correction.trim(), said, turn };
+  renderSuggestions([]);
+  $("drill-target").textContent = state.drill.target;
+  $("drill-target").lang = state.settings.locale;
+  setDrillFeedback("");
+  $("drill").hidden = false;
+  updateCallState();
+  scrollCallToBottom();
+  // Hear it first; hands-free then listens for the attempt.
+  speak(state.drill.target, [], () => maybeResumeListening());
+}
+
+function setDrillFeedback(text, ok = false) {
+  $("drill-feedback").textContent = text;
+  $("drill-feedback").classList.toggle("ok", ok);
+}
+
+// Returns whether the attempt passed.
+function checkDrill(attempt) {
+  const d = state.drill;
+  const { ok, missing } = drillMatch(attempt, d.target, d.said);
+  if (ok) {
+    setDrillFeedback(`✓ That's it: “${attempt}”`, true);
+    setTimeout(() => { if (state.drill === d) endDrill(); }, 1000);
+  } else {
+    setDrillFeedback(`Heard “${attempt}”. ${missing.length ? `Listen for: ${missing.join(", ")}. ` : ""}Try again.`);
+  }
+  return ok;
+}
+
+function endDrill() {
+  const d = state.drill;
+  if (!d) return;
+  state.drill = null;
+  $("drill").hidden = true;
+  if (recognizer) { dropNextResult = true; recognizer.abort(); }
+  stopSpeaking();
+  updateCallState();
+  presentReply(d.turn);
+}
+
+function isSkipCommand(text) {
+  const t = normalizeSpeech(text);
+  return t.split(" ").length <= 3 && /(?<!\p{L})(weiter|überspringen|skip|next)(?!\p{L})/u.test(t);
 }
 
 // ---------- word explorer & bookmarks ----------
@@ -1562,6 +1791,55 @@ async function openExplorer(word, sentence) {
     body.textContent = error.message;
   }
 }
+
+// The mistake tracker for the language picked on the setup screen.
+function renderMistakes() {
+  const language = $("language").value;
+  const ranked = rankedMistakes(language);
+  const practised = new Set(recurringMistakes(language).map((t) => t.type));
+  const list = $("mistakes");
+  list.replaceChildren();
+  $("reset-mistakes").hidden = !ranked.length;
+  $("mistakes-sync").textContent = trainerLink()
+    ? "Kept in your Vocab Trainer too, so it follows you to your other devices."
+    : "Kept on this device only. Connect your Vocab Trainer above to have it on all your devices.";
+  if (!ranked.length) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = `Corrections are sorted here by kind of mistake. The ones you make again and again get practised on purpose in your ${language} conversations.`;
+    list.append(li);
+    return;
+  }
+  const clip = (t) => (t.length > 90 ? `${t.slice(0, 87)}…` : t);
+  for (const t of ranked) {
+    const li = document.createElement("li");
+    const name = MISTAKE_TYPES[t.type];
+    li.append(`${name[0].toUpperCase()}${name.slice(1)} — ${t.count}×`);
+    if (practised.has(t.type)) {
+      const tag = document.createElement("span");
+      tag.className = "mistake-focus";
+      tag.textContent = "being practised";
+      li.append(" ", tag);
+    }
+    const example = document.createElement("div");
+    example.className = "muted mistake-example";
+    example.textContent = `“${clip(t.example.said)}” → “${clip(t.example.fix)}”`;
+    li.append(example);
+    list.append(li);
+  }
+}
+
+$("reset-mistakes").addEventListener("click", () => {
+  const language = $("language").value;
+  if (!confirm(`Forget your recorded ${language} mistakes?`)) return;
+  const log = store.get("mistakes", {});
+  delete log[language];
+  store.set("mistakes", log);
+  // Remembered, so the linked trainer clears it on the other devices too.
+  store.set("mistake_resets", { ...store.get("mistake_resets", {}), [language]: Date.now() });
+  renderMistakes();
+  syncMistakes();
+});
 
 function saveBookmark(info) {
   const bookmarks = store.get("bookmarks", []);
@@ -1674,6 +1952,7 @@ $("start").addEventListener("click", async () => {
     level: $("level").value,
     characterName: usesScene ? (SCENARIOS[scenario] ?? SCENARIOS.cafe).character : PARTNER.character,
     vocab,
+    sayAgain: $("say-again").checked,
     request: {
       language: languageSelect.value,
       nativeLanguage: $("native").value,
@@ -1765,6 +2044,8 @@ $("trainer-form").addEventListener("submit", async (event) => {
     await connectTrainer(email, password);
     $("trainer-password").value = "";
     await refreshLearntWords();
+    syncMistakes();
+    renderMistakes();
   } catch (error) {
     renderTrainerLink(null, error.message === "Failed to fetch" ? "Couldn't reach the Vocab Trainer." : error.message);
   } finally {
@@ -1776,6 +2057,7 @@ $("trainer-unlink").addEventListener("click", async () => {
   store.set("trainer_link", null);
   await idbSet("learnt_words", []).catch(() => {});
   renderTrainerLink(null);
+  renderMistakes();
   refreshVocabUI((await vocabMeta().catch(() => ({ count: 0 }))).count);
 });
 
@@ -1796,6 +2078,9 @@ $("mode").addEventListener("change", () => {
 });
 
 $("language").addEventListener("change", preloadSelectedVoice);
+$("language").addEventListener("change", renderMistakes);
+$("say-again").checked = store.get("say_again", true);
+$("say-again").addEventListener("change", () => store.set("say_again", $("say-again").checked));
 
 function submitComposer() {
   // A reply is still loading (or the call is finished/on hold): keep what's typed.
@@ -1803,6 +2088,10 @@ function submitComposer() {
   const text = $("text").value.trim();
   if (!text) return;
   $("text").value = "";
+  if (state.drill) {
+    checkDrill(text); // typing the corrected sentence also counts
+    return;
+  }
   if (isPauseCommand(text)) {
     setPaused(true);
     return;
@@ -1862,6 +2151,20 @@ onTap($("coach"), () => {
   $("coach").scrollIntoView({ block: "nearest", behavior: "smooth" });
 }, { selectable: true });
 
+// Say-it-again panel: speak the correction (or type it), hear it again, or move on.
+onTap($("drill-say"), () => {
+  if (!state.drill || recognizer) return;
+  $("text").blur(); // speaking, not typing: let the keyboard go
+  setDrillFeedback("");
+  startListening();
+});
+onTap($("drill-hear"), () => {
+  if (!state.drill) return;
+  if (recognizer) { dropNextResult = true; recognizer.abort(); }
+  speak(state.drill.target, [], () => maybeResumeListening());
+});
+onTap($("drill-skip"), () => endDrill());
+
 onTap($("explorer-close"), () => {
   $("explorer").hidden = true;
 });
@@ -1871,6 +2174,8 @@ $("end").addEventListener("click", () => {
   stopListening();
   stopSpeaking();
   state.history = [];
+  state.drill = null;
+  $("drill").hidden = true;
   state.rapport = 0;
   state.finished = false;
   state.handsFree = false;
@@ -1888,6 +2193,7 @@ $("end").addEventListener("click", () => {
   setBusy(false);
   leaveCall();
   $("setup").hidden = false;
+  syncMistakes(); // the call is over: send its mistakes
 });
 
 // Voices load asynchronously in Chrome.
@@ -1896,6 +2202,7 @@ if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => {};
 refreshKeyGate();
 renderStats();
 renderBookmarks();
+renderMistakes();
 // Get the voice ready while the learner picks their settings, so the first reply doesn't wait.
 preloadSelectedVoice();
 // Show any already-imported vocab; if none, fetch the default URL in the background.
@@ -1907,4 +2214,11 @@ vocabMeta()
     if (m.count === 0) loadVocabUrl(DEFAULT_VOCAB_URL, { silent: true });
   })
   .catch(() => {})
-  .finally(refreshLearntWords);
+  .finally(() => {
+    refreshLearntWords();
+    syncMistakes();
+  });
+// Leaving the page (closing the tab, switching apps) sends what this device recorded.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") syncMistakes({ keepalive: true });
+});

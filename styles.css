@@ -243,6 +243,26 @@ body.in-call { overflow: hidden; }
 .check { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--text); }
 .check input { min-height: auto; width: auto; }
 
+/* Say it again: the corrected sentence to repeat before the reply comes. */
+.drill { border: 1px solid var(--warn); border-radius: 12px; padding: 10px 12px; background: var(--bg); }
+.drill[hidden] { display: none; }
+.drill p { margin: 0; }
+.drill-label { font-size: 0.8rem; color: var(--muted); }
+.drill .drill-target { font-size: 1.1rem; font-weight: 600; margin: 2px 0 6px; }
+.drill .drill-feedback { font-size: 0.85rem; color: var(--warn); margin-bottom: 6px; }
+.drill-feedback:empty { display: none; }
+.drill .drill-feedback.ok { color: var(--good); }
+.drill-actions { display: flex; gap: 8px; }
+.drill-actions button { min-height: 38px; padding: 6px 12px; font-size: 0.9rem; }
+.call[data-state="drill"] .call-state { color: var(--warn); border-color: currentColor; }
+
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.card-head button { min-height: 32px; padding: 2px 10px; font-size: 0.85rem; }
+.mistake-focus { display: inline-block; white-space: nowrap; font-size: 0.75rem; color: var(--warn); border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; }
+.mistake-example { font-size: 0.85rem; overflow-wrap: anywhere; }
+.say-again { margin-bottom: 12px; }
+.mistakes-sync { font-size: 0.8rem; margin: 8px 0 0; }
+
 .focus { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; font-size: 0.85rem; }
 .focus-label { color: var(--muted); }
 .focus-word { background: var(--character); border-radius: 999px; padding: 2px 10px; }
