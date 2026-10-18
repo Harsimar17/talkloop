@@ -7,14 +7,24 @@ const PHONEMIZE_WASM = "https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm
 const VOICES_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main";
 const CACHE_NAME = "piper-voices-v1";
 
-// One good voice per app language (Piper has no Japanese voice).
+// One good voice per app language (Piper has no Japanese voice). German is Thorsten's
+// emotional voice: the same speaker recorded in several moods (see MOODS).
 const VOICES = {
-  de: "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
+  de: "de/de_DE/thorsten_emotional/medium/de_DE-thorsten_emotional-medium.onnx",
   es: "es/es_ES/davefx/medium/es_ES-davefx-medium.onnx",
   fr: "fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx",
   it: "it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx",
   pt: "pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx",
 };
+
+// Voices replaced by the ones above: removed from the cache so they don't take up space.
+const OLD_VOICES = ["de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx"];
+
+// The moods a reply can be spoken in, for voices recorded in several moods.
+export const MOODS = ["neutral", "amused", "surprised", "angry", "sleepy", "whisper"];
+
+// Pause between sentences, in seconds.
+const SENTENCE_GAP = 0.25;
 
 let ortPromise = null;
 let phonemizePromise = null;
@@ -105,11 +115,24 @@ export async function piperReady(locale) {
   }
 }
 
+async function forgetOldVoices() {
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    for (const v of OLD_VOICES) {
+      await cache.delete(`${VOICES_BASE}/${v}`);
+      await cache.delete(`${VOICES_BASE}/${v}.json`);
+    }
+  } catch {
+    // Cache Storage unavailable: nothing was kept anyway.
+  }
+}
+
 // Download (first time) and prepare the voice. Safe to call repeatedly.
 export function loadPiperVoice(locale, onProgress) {
   const lang = locale.split("-")[0];
   if (!VOICES[lang]) return Promise.reject(new Error("no open-source voice for this language"));
   if (!loaded.has(lang)) {
+    forgetOldVoices();
     const url = `${VOICES_BASE}/${VOICES[lang]}`;
     const p = (async () => {
       const [ort, configBuf, model] = await Promise.all([
@@ -136,27 +159,45 @@ async function phonemeIds(text, espeakVoice) {
   return JSON.parse(phonemizeOut).phoneme_ids;
 }
 
-// Text -> { pcm: 16-bit little-endian mono bytes, sampleRate }, same shape as Gemini TTS.
-// speed < 1 speaks more slowly.
-export async function piperSpeak(text, locale, { speed = 1 } = {}) {
-  const { ort, session, config } = await loadPiperVoice(locale);
-  const ids = await phonemeIds(text.trim(), config.espeak.voice);
+// "Oh! Wirklich? Das ist toll." -> ["Oh!", "Wirklich?", "Das ist toll."]
+function sentences(text) {
+  return (text.trim().match(/[^.!?…]+[.!?…]*["»«“”)]*/g) ?? []).map((t) => t.trim()).filter(Boolean);
+}
+
+async function synthesize(ort, session, config, text, sid, speed) {
+  const ids = await phonemeIds(text, config.espeak.voice);
   const inf = config.inference;
   const feeds = {
     input: new ort.Tensor("int64", BigInt64Array.from(ids, BigInt), [1, ids.length]),
     input_lengths: new ort.Tensor("int64", BigInt64Array.from([BigInt(ids.length)]), [1]),
     scales: new ort.Tensor("float32", Float32Array.from([inf.noise_scale, inf.length_scale / speed, inf.noise_w]), [3]),
   };
-  if (Object.keys(config.speaker_id_map ?? {}).length) {
-    feeds.sid = new ort.Tensor("int64", BigInt64Array.from([0n]), [1]);
-  }
+  if (sid !== null) feeds.sid = new ort.Tensor("int64", BigInt64Array.from([BigInt(sid)]), [1]);
   const { output } = await session.run(feeds);
-  const floats = output.data;
-  const pcm = new Uint8Array(floats.length * 2);
+  return output.data;
+}
+
+// Text -> { pcm: 16-bit little-endian mono bytes, sampleRate }, same shape as Gemini TTS.
+// speed < 1 speaks more slowly. Each sentence is spoken on its own, so its own "!" or "?"
+// shapes it, with a short pause between them. mood picks the recording for voices that have
+// several (MOODS); others ignore it.
+export async function piperSpeak(text, locale, { speed = 1, mood = "neutral" } = {}) {
+  const { ort, session, config } = await loadPiperVoice(locale);
+  const speakers = config.speaker_id_map ?? {};
+  const sid = Object.keys(speakers).length ? (speakers[mood] ?? speakers.neutral ?? 0) : null;
+  const parts = [];
+  for (const sentence of sentences(text)) parts.push(await synthesize(ort, session, config, sentence, sid, speed));
+  const gap = Math.round(SENTENCE_GAP * config.audio.sample_rate);
+  const total = parts.reduce((n, p) => n + p.length, 0) + gap * Math.max(0, parts.length - 1);
+  const pcm = new Uint8Array(total * 2); // the gaps stay zero: silence
   const view = new DataView(pcm.buffer);
-  for (let i = 0; i < floats.length; i++) {
-    const s = Math.max(-1, Math.min(1, floats[i]));
-    view.setInt16(i * 2, s < 0 ? s * 32768 : s * 32767, true);
-  }
+  let at = 0;
+  parts.forEach((floats, i) => {
+    if (i) at += gap;
+    for (let k = 0; k < floats.length; k++, at++) {
+      const v = Math.max(-1, Math.min(1, floats[k]));
+      view.setInt16(at * 2, v < 0 ? v * 32768 : v * 32767, true);
+    }
+  });
   return { pcm, sampleRate: config.audio.sample_rate };
 }

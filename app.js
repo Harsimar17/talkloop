@@ -1,5 +1,5 @@
 // Talkloop client: speech in, AI character turn out, spoken back with word highlighting.
-import { hasPiperVoice, piperLoaded, piperReady, loadPiperVoice, piperSpeak } from "./piper.js";
+import { hasPiperVoice, piperLoaded, piperReady, loadPiperVoice, piperSpeak, MOODS } from "./piper.js?v=2"; // bump with piper.js changes so no browser pairs this file with an old copy
 
 const $ = (id) => document.getElementById(id);
 
@@ -405,8 +405,10 @@ const TURN_SCHEMA = {
     },
     rapport_delta: { type: "INTEGER" },
     conversation_finished: { type: "BOOLEAN" },
+    // How the reply is spoken (the open-source German voice has a recording per mood).
+    mood: { type: "STRING", enum: MOODS },
   },
-  required: ["reply", "reply_translation", "suggestions", "coach", "rapport_delta", "conversation_finished"],
+  required: ["reply", "reply_translation", "suggestions", "coach", "rapport_delta", "conversation_finished", "mood"],
 };
 
 const WORD_SCHEMA = {
@@ -439,6 +441,8 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, t
     "Speech recognition produced the learner's message, so ignore missing punctuation and obvious transcription slips.",
     `Write reply_translation, coach.tip and nothing else in ${nativeLanguage}.`,
     "Give a correction only when the learner made a real grammar or word-choice mistake.",
+    "Your reply is read aloud, so let your feelings show in the words: react like a real person with short interjections (for example Oh!, Ach wirklich?, Super!, Oh nein!) and use ! and ? where you mean them.",
+    `Set mood to how the reply should sound: ${MOODS.join(", ")}. Use amused for fun or happy replies, surprised for amazement, angry only when the role calls for annoyance, sleepy for tiredness, whisper for secrets, and neutral otherwise.`,
   ];
   if (targetWords.length && learnt) {
     const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
@@ -463,6 +467,7 @@ function toJsonSchema(s) {
     out.properties = Object.fromEntries(Object.entries(s.properties).map(([k, v]) => [k, toJsonSchema(v)]));
   }
   if (s.items) out.items = toJsonSchema(s.items);
+  if (s.enum) out.enum = s.enum;
   if (s.required) out.required = s.required;
   return out;
 }
@@ -950,7 +955,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Voice order: Piper (open-source, runs on the device, unlimited) → Gemini (small
 // daily free quota) → the browser's built-in voice.
-async function speak(text, wordSpans, onDone) {
+async function speak(text, wordSpans, onDone, mood = "neutral") {
   stopSpeaking();
   const token = speakToken;
   const locale = state.settings.locale;
@@ -979,7 +984,7 @@ async function speak(text, wordSpans, onDone) {
   noteVoice(wordSpans, "");
   setAudioSession("playback");
 
-  const cached = ttsCache.get(`${locale}|${text}`);
+  const cached = ttsCache.get(`${locale}|${mood}|${text}`);
   if (cached) return play(cached.audio, cached.note);
 
   // 1. Piper, once it's loaded. A reply never waits for a download: until the voice is
@@ -994,8 +999,8 @@ async function speak(text, wordSpans, onDone) {
     }
     if (piperLoaded(locale)) {
       try {
-        const audio = await piperSpeak(text, locale, { speed: rate });
-        rememberTts(`${locale}|${text}`, { audio, note: "" });
+        const audio = await piperSpeak(text, locale, { speed: rate, mood });
+        rememberTts(`${locale}|${mood}|${text}`, { audio, note: "" });
         return play(audio, "");
       } catch (error) {
         console.warn("Piper voice failed:", error);
@@ -1017,7 +1022,7 @@ async function speak(text, wordSpans, onDone) {
     try {
       const audio = await geminiTts(text);
       const note = `Gemini voice — ${piperNote}`;
-      rememberTts(`${locale}|${text}`, { audio, note });
+      rememberTts(`${locale}|${mood}|${text}`, { audio, note });
       return play(audio, note);
     } catch (error) {
       if (token !== speakToken) return;
@@ -1190,7 +1195,7 @@ function addCharacterMessage(turn) {
   tools.className = "tools";
   const replay = document.createElement("button");
   replay.textContent = "▶ Replay";
-  replay.addEventListener("click", () => speak(turn.reply, spans));
+  replay.addEventListener("click", () => speak(turn.reply, spans, null, turn.mood));
   const translate = document.createElement("button");
   translate.textContent = "Translate";
   translate.addEventListener("click", () => {
@@ -1203,11 +1208,11 @@ function addCharacterMessage(turn) {
   scrollCallToBottom();
   // A reply that arrives while the call is paused is spoken on resume.
   if (state.paused) {
-    pendingReply = { text: turn.reply, spans };
+    pendingReply = { text: turn.reply, spans, mood: turn.mood };
     return;
   }
   // When hands-free, start listening again once the character finishes speaking.
-  speak(turn.reply, spans, () => maybeResumeListening());
+  speak(turn.reply, spans, () => maybeResumeListening(), turn.mood);
 }
 
 function maybeResumeListening() {
@@ -1403,7 +1408,7 @@ function setPaused(paused, { byVoice = false } = {}) {
     // The browser allows one recognizer at a time: let the resume listener stop first.
     stopWakeListener().then(() => {
       if (state.paused) return;
-      if (reply) speak(reply.text, reply.spans, () => maybeResumeListening());
+      if (reply) speak(reply.text, reply.spans, () => maybeResumeListening(), reply.mood);
       else maybeResumeListening();
     });
   }
