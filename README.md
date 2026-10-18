@@ -61,7 +61,7 @@ Every visitor enters their own keys, so you never ship a key and there's no serv
 - Conversation (Gemini): `gemini-flash-lite-latest` (replies in about a second), falling back to
   `gemini-flash-latest`
 - Speech (default): [Piper](https://github.com/rhasspy/piper), an open-source voice that runs on
-  the device (`piper.js`). The voice (German: "Thorsten" medium, ~63 MB plus ~18 MB of
+  the device (`piper.js`). The voice (German: "Thorsten" high quality, ~113 MB plus ~18 MB of
   pronunciation data) downloads when you start your first conversation and is then stored in the
   browser. No key, no limit. Replies are spoken one sentence at a time, so each sentence's `!` or
   `?` shapes its intonation.

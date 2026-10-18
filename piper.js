@@ -8,10 +8,10 @@ const VOICES_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main";
 const CACHE_NAME = "piper-voices-v1";
 
 // One good voice per app language (Piper has no Japanese voice). German is Thorsten's
-// plain medium voice: clear and easy for a learner to follow. (The emotional voice,
-// recorded in acted moods, sounded mumbly and hard to understand, so it was dropped.)
+// high-quality voice: the most natural, native-sounding on-device German voice Piper
+// has — clear and easy to follow, and no cloud voice needed.
 const VOICES = {
-  de: "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
+  de: "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx",
   es: "es/es_ES/davefx/medium/es_ES-davefx-medium.onnx",
   fr: "fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx",
   it: "it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx",
@@ -19,7 +19,10 @@ const VOICES = {
 };
 
 // Voices replaced by the ones above: removed from the cache so they don't take up space.
-const OLD_VOICES = ["de/de_DE/thorsten_emotional/medium/de_DE-thorsten_emotional-medium.onnx"];
+const OLD_VOICES = [
+  "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
+  "de/de_DE/thorsten_emotional/medium/de_DE-thorsten_emotional-medium.onnx",
+];
 
 // The moods a reply can be spoken in, for voices recorded in several moods.
 export const MOODS = ["neutral", "amused", "surprised", "angry", "sleepy", "whisper"];

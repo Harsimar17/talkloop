@@ -1,5 +1,5 @@
 // Talkloop client: speech in, AI character turn out, spoken back with word highlighting.
-import { hasPiperVoice, piperLoaded, piperReady, loadPiperVoice, piperSpeak, MOODS } from "./piper.js?v=3"; // bump with piper.js changes so no browser pairs this file with an old copy
+import { hasPiperVoice, piperLoaded, piperReady, loadPiperVoice, piperSpeak, MOODS } from "./piper.js?v=4"; // bump with piper.js changes so no browser pairs this file with an old copy
 
 const $ = (id) => document.getElementById(id);
 
