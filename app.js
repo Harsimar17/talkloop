@@ -1476,10 +1476,20 @@ function leaveCall() {
   $("conversation").hidden = true;
 }
 
-// Keep the call screen sized to the visible area when the phone keyboard opens.
+// Keep the call screen pinned to the visible area when the phone keyboard opens.
+// The keyboard shrinks the visual viewport and (on iOS) scrolls it, but a position:fixed
+// layer stays anchored to the full layout viewport — so without this the dock is left
+// stranded at the top with a gap above the keyboard. Size the call to the visible height
+// and shift it down by the viewport's scroll offset so it lines up with what's on screen.
 if (window.visualViewport) {
-  const fit = () => document.documentElement.style.setProperty("--vvh", `${window.visualViewport.height}px`);
-  window.visualViewport.addEventListener("resize", fit);
+  const vv = window.visualViewport;
+  const fit = () => {
+    const root = document.documentElement.style;
+    root.setProperty("--vvh", `${vv.height}px`);
+    root.setProperty("--vvtop", `${vv.offsetTop}px`);
+  };
+  vv.addEventListener("resize", fit);
+  vv.addEventListener("scroll", fit);
   fit();
 }
 

@@ -110,8 +110,13 @@ select, input { min-height: 44px; } /* comfortable touch targets; 16px font avoi
 body.in-call { overflow: hidden; }
 .call {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
   height: var(--vvh, 100dvh); /* follows the on-screen keyboard on phones */
+  /* Shift down by the visual viewport's scroll offset so iOS doesn't strand the
+     dock at the top above the keyboard (see the visualViewport handler in app.js). */
+  transform: translateY(var(--vvtop, 0px));
   z-index: 1;
   display: flex;
   flex-direction: column;
