@@ -819,42 +819,44 @@ function startListening() {
     setStatus("Voice input needs Chrome or Edge. You can still type.");
     return;
   }
+  if (recognizer) return; // one listening session at a time
   stopSpeaking();
-  recognizer = new Recognition();
-  recognizer.lang = state.settings.locale;
-  recognizer.interimResults = true;
+  // This session's recognizer: its handlers and pause timer use it, never the shared variable,
+  // so a session that ends late can't stop or unhook a newer one.
+  const rec = new Recognition();
+  recognizer = rec;
+  rec.lang = state.settings.locale;
+  rec.interimResults = true;
   // Keep listening through pauses; a longer silence ends the turn.
-  recognizer.continuous = true;
+  rec.continuous = true;
 
-  let finalText = "";
+  // Everything heard so far, rebuilt from all the results each time. Browsers differ in when,
+  // or whether, they mark results final mid-session (Safari on iPhone often keeps them interim
+  // until the session ends), so interim text counts too: nothing heard is lost if the session
+  // ends early, and a result sent again isn't counted twice.
+  let heard = "";
   let silenceTimer = null;
-  const armSilence = () => {
+  rec.onresult = (event) => {
+    heard = Array.from(event.results, (result) => result[0].transcript).join(" ").replace(/\s+/g, " ").trim();
+    $("live").textContent = heard;
+    if (!heard) return;
+    // Any speech, final or not, restarts the pause timer: after a pause the turn ends and is
+    // sent hands-free. You get time to think.
     clearTimeout(silenceTimer);
-    // Auto-stop after a pause so the turn sends hands-free. You get time to think.
-    silenceTimer = setTimeout(() => recognizer?.stop(), SILENCE_MS);
+    silenceTimer = setTimeout(() => rec.stop(), SILENCE_MS);
   };
-
-  recognizer.onresult = (event) => {
-    let interim = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i];
-      if (result.isFinal) finalText += result[0].transcript + " ";
-      else interim += result[0].transcript;
-    }
-    $("live").textContent = (finalText + interim).trim();
-    if (finalText.trim()) armSilence();
-  };
-  recognizer.onerror = (event) => {
+  rec.onerror = (event) => {
     if (event.error === "no-speech") setStatus("I'm listening… take your time.");
     else if (event.error === "not-allowed") { state.handsFree = false; setStatus("Microphone permission was denied."); }
     else if (event.error !== "aborted") setStatus(`Speech recognition error: ${event.error}`);
   };
-  recognizer.onend = () => {
+  rec.onend = () => {
     clearTimeout(silenceTimer);
+    if (recognizer !== rec) return;
     recognizer = null;
     setMic(false);
     $("live").textContent = "";
-    const spoken = finalText.trim();
+    const spoken = heard;
     if (dropNextResult) {
       dropNextResult = false; // cut short on purpose (e.g. "Hear it" or Skip in a drill)
     } else if (state.paused) {
@@ -865,6 +867,10 @@ function startListening() {
       // Saying the corrected sentence: check it; hands-free listens again after a miss.
       if (isSkipCommand(spoken)) endDrill();
       else if (!checkDrill(spoken)) maybeResumeListening();
+    } else if (spoken && state.busy) {
+      // The reply to the last turn is still on its way: keep what was said instead of losing it.
+      $("text").value = spoken;
+      setStatus("Still answering — your words are in the box. Send them when you're ready.");
     } else if (spoken) {
       // Hands-free: send straight away. Listening resumes after the reply is spoken.
       sendTurn(spoken);
@@ -875,7 +881,16 @@ function startListening() {
       setStatus("");
     }
   };
-  recognizer.start();
+  try {
+    rec.start();
+  } catch (error) {
+    // The browser refused to start (e.g. the microphone is still busy): say so, don't pretend to listen.
+    recognizer = null;
+    state.handsFree = false;
+    setMic(false);
+    setStatus(`The microphone didn't start (${error.message}). Tap Talk to try again.`);
+    return;
+  }
   setMic(true);
   setStatus("Listening… just talk. Tap the mic to stop hands-free.");
 }
