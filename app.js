@@ -2031,6 +2031,7 @@ function renderTrainerLink(count, problem = "") {
     : `🔗 Linked to your Vocab Trainer · your partner uses all A1 and A2 words plus ${
         count ? `the ${count} B1 words you have learnt there` : "your learnt B1 words (none yet)"}.`;
   $("trainer-status").textContent = problem ? `${problem} ${linked ? text : ""}`.trim() : text;
+  $("vocab-summary").textContent = linked ? "🔗 Linked" : "Not linked";
 }
 
 $("trainer-form").addEventListener("submit", async (event) => {
@@ -2070,11 +2071,70 @@ function refreshVocabUI(count) {
   }
 }
 
-// The scene only matters in scene role-play; grey it out otherwise.
+// The scene only matters in scene role-play; show it only then.
 $("mode").addEventListener("change", () => {
   const usesScene = (MODES[$("mode").value] ?? MODES.scene).usesScene;
   $("scenario").disabled = !usesScene;
-  $("scenario").closest("label").style.opacity = usesScene ? "1" : "0.5";
+  $("scenario").closest("label").hidden = !usesScene;
+});
+
+// Tappable cards for a <select>, which stays the source of truth (it is what the rest of the
+// code reads): picking a card sets the select and fires its change event. An option's text
+// "Free chat — partner leads" becomes a title and a subtitle.
+function pickerFor(select, className, icons = {}) {
+  const box = document.createElement("div");
+  box.className = `picker ${className}`;
+  box.setAttribute("role", "radiogroup");
+  box.setAttribute("aria-label", select.getAttribute("aria-label") ?? "");
+  const cards = [...select.options].map((option) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.setAttribute("role", "radio");
+    const [title, sub] = option.textContent.split(" — ");
+    for (const [cls, text] of [["pick-icon", icons[option.value]], ["pick-title", title], ["pick-sub", sub]]) {
+      if (!text) continue;
+      const span = document.createElement("span");
+      span.className = cls;
+      span.textContent = text;
+      card.append(span);
+    }
+    card.addEventListener("click", () => {
+      select.value = option.value;
+      select.dispatchEvent(new Event("change"));
+    });
+    return card;
+  });
+  const sync = () => cards.forEach((card, i) => card.setAttribute("aria-checked", String(select.selectedIndex === i)));
+  select.addEventListener("change", sync);
+  sync();
+  box.append(...cards);
+  select.after(box);
+  select.hidden = true;
+}
+pickerFor($("level"), "picker-level");
+pickerFor($("mode"), "picker-mode", { lead: "💬", interview: "🙋", topic: "💡", scene: "🎭" });
+
+// Theme: follows the device unless light or dark is picked here (remembered per device; the
+// script in <head> applies it before the first paint).
+const THEMES = { auto: ["🌗", "Theme: same as your device"], light: ["☀️", "Theme: light"], dark: ["🌙", "Theme: dark"] };
+let theme = THEMES[store.get("theme", "auto")] ? store.get("theme", "auto") : "auto";
+function applyTheme() {
+  if (theme === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  $("theme").textContent = THEMES[theme][0];
+  $("theme").title = THEMES[theme][1];
+  $("theme").setAttribute("aria-label", `${THEMES[theme][1]} (tap to change)`);
+}
+applyTheme();
+$("theme").addEventListener("click", () => {
+  theme = { auto: "light", light: "dark", dark: "auto" }[theme];
+  store.set("theme", theme);
+  applyTheme();
+});
+
+// Laptop: Esc closes the word explorer.
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("explorer").hidden) $("explorer").hidden = true;
 });
 
 $("language").addEventListener("change", preloadSelectedVoice);
@@ -2208,6 +2268,8 @@ preloadSelectedVoice();
 // Show any already-imported vocab; if none, fetch the default URL in the background.
 // Then the learnt words from the Vocab Trainer, if linked (or just linked via the URL).
 takeTrainerLinkFromUrl();
+// Setting up vocabulary is once per device: keep it open until the Vocab Trainer is linked.
+$("vocab-details").open = !trainerLink();
 vocabMeta()
   .then((m) => {
     refreshVocabUI(m.count);

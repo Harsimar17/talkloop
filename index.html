@@ -6,60 +6,73 @@
     <title>Talkloop</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="favicon.svg" />
-    <meta name="theme-color" content="#2f5fd0" />
+    <meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#121417" media="(prefers-color-scheme: dark)" />
+    <script>
+      // A theme picked on this device applies before the first paint (no flash); else the system's.
+      try {
+        const theme = JSON.parse(localStorage.getItem("theme"));
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      } catch {}
+    </script>
     <!-- ?v= makes phones fetch the new file after a change instead of a cached copy: bump it with each change. -->
-    <link rel="stylesheet" href="styles.css?v=6" />
+    <link rel="stylesheet" href="styles.css?v=7" />
   </head>
   <body>
     <header class="topbar">
-      <h1>Talkloop</h1>
-      <div class="stats">
-        <span id="streak" title="Days in a row you practised">🔥 0</span>
-        <span id="rapport" title="How much the character likes chatting with you">♥ 0</span>
+      <div class="brand">
+        <img src="favicon.svg" alt="" width="30" height="30" />
+        <h1>Talkloop</h1>
+      </div>
+      <div class="topbar-right">
+        <span id="streak" class="pill" title="Days in a row you practised">🔥 0</span>
+        <button type="button" id="theme" class="icon-btn" aria-label="Theme"></button>
       </div>
     </header>
 
-    <section id="keygate" class="card" hidden>
-      <h2>Connect an AI</h2>
-      <p class="muted">
-        Talkloop runs entirely in your browser and talks to the AI you pick with your own free key.
-        Keys are stored only in this browser and are sent only to that service.
-      </p>
-      <label>Conversation AI
-        <select id="provider">
-          <option value="mistral">Mistral — best German</option>
-          <option value="gemini">Google Gemini</option>
-        </select>
-      </label>
-      <label data-provider="mistral">Mistral API key
-        <input id="mistral-key" type="password" autocomplete="off" placeholder="Paste your Mistral key" />
-        <span class="muted">Free at
-          <a href="https://console.mistral.ai/api-keys" target="_blank" rel="noopener">console.mistral.ai</a>
-          (pick the free Experiment plan).</span>
-      </label>
-      <label data-provider="mistral">Groq API key <span class="muted">(optional — used when Mistral is busy)</span>
-        <input id="groq-key" type="password" autocomplete="off" placeholder="Paste your Groq key (gsk_…)" />
-        <span class="muted">Free at
-          <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com</a>.</span>
-      </label>
-      <label>Gemini API key <span id="gemini-optional" class="muted">(optional — backup voice)</span>
-        <input id="api-key" type="password" autocomplete="off" placeholder="Paste your key (AIza… or AQ.…)" />
-        <span class="muted">Free at
-          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</span>
-      </label>
-      <button id="save-key" class="primary">Save</button>
-      <p id="key-status" class="status"></p>
-    </section>
+    <div class="layout">
+      <div class="col-main">
+        <section id="keygate" class="card" hidden>
+          <h2>Connect an AI</h2>
+          <p class="muted">
+            Talkloop runs entirely in your browser and talks to the AI you pick with your own free key.
+            Keys are stored only in this browser and are sent only to that service.
+          </p>
+          <label>Conversation AI
+            <select id="provider">
+              <option value="mistral">Mistral — best German</option>
+              <option value="gemini">Google Gemini</option>
+            </select>
+          </label>
+          <label data-provider="mistral">Mistral API key
+            <input id="mistral-key" type="password" autocomplete="off" placeholder="Paste your Mistral key" />
+            <span class="muted">Free at
+              <a href="https://console.mistral.ai/api-keys" target="_blank" rel="noopener">console.mistral.ai</a>
+              (pick the free Experiment plan).</span>
+          </label>
+          <label data-provider="mistral">Groq API key <span class="muted">(optional — used when Mistral is busy)</span>
+            <input id="groq-key" type="password" autocomplete="off" placeholder="Paste your Groq key (gsk_…)" />
+            <span class="muted">Free at
+              <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com</a>.</span>
+          </label>
+          <label>Gemini API key <span id="gemini-optional" class="muted">(optional — backup voice)</span>
+            <input id="api-key" type="password" autocomplete="off" placeholder="Paste your key (AIza… or AQ.…)" />
+            <span class="muted">Free at
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</span>
+          </label>
+          <button id="save-key" class="primary">Save</button>
+          <p id="key-status" class="status"></p>
+        </section>
 
-    <section id="setup" class="card" hidden>
-      <div id="key-saved" class="keyline" hidden>
-        <span id="key-summary" class="muted"></span>
-        <button id="change-key" type="button">Change</button>
-      </div>
-      <h2>Start a conversation</h2>
-      <div class="grid">
-        <label>Practise
-          <select id="language">
+        <section id="setup" class="card setup" hidden>
+          <div id="key-saved" class="keyline" hidden>
+            <span id="key-summary" class="muted"></span>
+            <button id="change-key" type="button">Change</button>
+          </div>
+          <h2>Start a conversation</h2>
+          <div class="grid">
+            <label>Practise
+              <select id="language">
             <option value="Spanish" data-locale="es-ES">Spanish</option>
             <option value="French" data-locale="fr-FR">French</option>
             <option value="German" data-locale="de-DE" selected>German</option>
@@ -67,43 +80,39 @@
             <option value="Japanese" data-locale="ja-JP">Japanese</option>
             <option value="Portuguese" data-locale="pt-BR">Portuguese</option>
           </select>
-        </label>
-        <label>I speak
-          <select id="native">
+            </label>
+            <label>I speak
+              <select id="native">
             <option>English</option>
             <option>Hindi</option>
             <option>Punjabi</option>
             <option>Spanish</option>
           </select>
-        </label>
-        <label>Level
-          <select id="level">
+            </label>
+          </div>
+          <!-- Level and conversation are shown as tappable cards (pickerFor in app.js); the
+               selects stay the source of truth. -->
+          <div class="field">
+            <span class="field-label">Level</span>
+            <select id="level" aria-label="Level">
             <option value="A1">A1</option>
             <option value="A2">A2</option>
             <option value="B1">B1</option>
             <option value="B2">B2</option>
             <option value="C1">C1</option>
           </select>
-        </label>
-        <label>Mode
-          <select id="mode">
+          </div>
+          <div class="field">
+            <span class="field-label">Conversation</span>
+            <select id="mode" aria-label="Conversation">
             <option value="lead">Free chat — partner leads</option>
             <option value="interview">Interview me</option>
             <option value="topic">Discuss a topic</option>
             <option value="scene">Scene role-play</option>
           </select>
-        </label>
-        <label>Tense to practise
-          <select id="tense">
-            <option value="any">Any tense — just talk</option>
-            <option value="present">Present (Präsens) — ich spiele</option>
-            <option value="perfekt">Past, spoken (Perfekt) — ich habe gespielt</option>
-            <option value="praeteritum">Past, written (Präteritum) — ich spielte</option>
-            <option value="future">Future (Futur I) — ich werde spielen</option>
-          </select>
-        </label>
-        <label>Scene
-          <select id="scenario" disabled>
+          </div>
+          <label hidden>Scene
+            <select id="scenario" disabled>
             <optgroup label="Everyday">
               <option value="cafe">Café — order a coffee</option>
               <option value="market">Market — shop and haggle</option>
@@ -123,46 +132,82 @@
               <option value="job">Job interview</option>
             </optgroup>
           </select>
-        </label>
-      </div>
-      <p id="voice-status" class="muted voice-status" aria-live="polite"></p>
-
-      <div class="vocab">
-        <div class="vocab-head">
-          <strong>My vocabulary</strong>
-          <label class="file-btn">Import file
-            <input id="vocab-file" type="file" accept="application/json,.json" hidden />
           </label>
-        </div>
-        <div class="trainer-link">
-          <p id="trainer-status" class="muted" aria-live="polite"></p>
-          <button type="button" id="trainer-unlink" hidden>Unlink</button>
-        </div>
-        <form id="trainer-form" class="trainer-form" hidden>
-          <input id="trainer-email" type="email" autocomplete="username" placeholder="Vocab Trainer email" required />
-          <input id="trainer-password" type="password" autocomplete="current-password" placeholder="Password" required />
-          <button type="submit" id="trainer-connect">Connect</button>
-        </form>
-        <div class="vocab-url-row">
-          <input id="vocab-url" type="url"
-                 value="https://harsimar17.github.io/Deutsch-Vocab-Helper/german_vocab.json"
-                 placeholder="https://…/vocab.json" />
-          <button type="button" id="load-url">Load from web</button>
-        </div>
-        <p id="vocab-status" class="muted"></p>
-        <label class="check">
-          <input id="use-vocab" type="checkbox" disabled checked />
-          Weave my vocab into the conversation (words up to your level)
-        </label>
+          <label>Tense to practise
+            <select id="tense">
+            <option value="any">Any tense — just talk</option>
+            <option value="present">Present (Präsens) — ich spiele</option>
+            <option value="perfekt">Past, spoken (Perfekt) — ich habe gespielt</option>
+            <option value="praeteritum">Past, written (Präteritum) — ich spielte</option>
+            <option value="future">Future (Futur I) — ich werde spielen</option>
+          </select>
+          </label>
+          <div class="toggles">
+          <label class="check">
+            <input id="use-vocab" type="checkbox" disabled checked />
+            Weave my vocab into the conversation (words up to your level)
+          </label>
+          <label class="check say-again">
+            <input id="say-again" type="checkbox" checked />
+            After a correction, say the corrected sentence before the conversation moves on
+          </label>
+          </div>
+          <p id="voice-status" class="muted voice-status" aria-live="polite"></p>
+
+          <!-- Set up once per device: open until the Vocab Trainer is linked. -->
+          <details id="vocab-details" class="vocab">
+            <summary>
+              <span>Vocabulary &amp; Vocab Trainer</span>
+              <span id="vocab-summary" class="muted"></span>
+            </summary>
+            <div class="vocab-body">
+              <div class="trainer-link">
+                <p id="trainer-status" class="muted" aria-live="polite"></p>
+                <button type="button" id="trainer-unlink" hidden>Unlink</button>
+              </div>
+              <form id="trainer-form" class="trainer-form" hidden>
+                <input id="trainer-email" type="email" autocomplete="username" placeholder="Vocab Trainer email" required />
+                <input id="trainer-password" type="password" autocomplete="current-password" placeholder="Password" required />
+                <button type="submit" id="trainer-connect">Connect</button>
+              </form>
+              <div class="vocab-head">
+                <strong>Word list</strong>
+                <label class="file-btn">Import file
+                  <input id="vocab-file" type="file" accept="application/json,.json" hidden />
+                </label>
+              </div>
+              <div class="vocab-url-row">
+                <input id="vocab-url" type="url"
+                       value="https://harsimar17.github.io/Deutsch-Vocab-Helper/german_vocab.json"
+                       placeholder="https://…/vocab.json" aria-label="Word list address" />
+                <button type="button" id="load-url">Load from web</button>
+              </div>
+              <p id="vocab-status" class="muted"></p>
+            </div>
+          </details>
+
+          <div class="start-bar">
+            <button id="start" class="primary">Start conversation</button>
+          </div>
+        </section>
+
       </div>
+      <aside class="col-side">
+      <section class="card">
+        <div class="card-head">
+          <h2>Your recurring mistakes</h2>
+          <button type="button" id="reset-mistakes" hidden>Reset</button>
+        </div>
+        <ul id="mistakes" class="bookmarks"></ul>
+        <p id="mistakes-sync" class="muted mistakes-sync"></p>
+      </section>
 
-      <label class="check say-again">
-        <input id="say-again" type="checkbox" checked />
-        After a correction, say the corrected sentence before the conversation moves on
-      </label>
-
-      <button id="start" class="primary">Start</button>
-    </section>
+      <section class="card">
+        <h2>Saved words</h2>
+        <ul id="bookmarks" class="bookmarks"></ul>
+      </section>
+      </aside>
+    </div>
 
     <!-- Full-screen "phone call" while a conversation runs: caller header on top,
          scrolling transcript in the middle, call controls pinned to the bottom. -->
@@ -170,7 +215,10 @@
       <header class="call-head">
         <div id="call-avatar" class="avatar" aria-hidden="true"></div>
         <div class="caller">
-          <div id="call-name" class="caller-name"></div>
+          <div class="caller-row">
+            <span id="call-name" class="caller-name"></span>
+            <span id="rapport" class="rapport" title="How much the character likes chatting with you">♥ 0</span>
+          </div>
           <div class="caller-sub"><span id="call-mode"></span> · <span id="call-timer">00:00</span></div>
         </div>
         <div id="call-state" class="call-state">Connecting…</div>
@@ -185,7 +233,7 @@
         <div id="focus" class="focus" hidden aria-label="Vocabulary being practised"></div>
         <!-- Say it again: after a correction, the corrected sentence is said before the reply comes. -->
         <div id="drill" class="drill" hidden aria-live="polite">
-          <p class="drill-label">Say it correctly:</p>
+          <p class="drill-label">Say it correctly</p>
           <p id="drill-target" class="drill-target"></p>
           <p id="drill-feedback" class="drill-feedback"></p>
           <div class="drill-actions">
@@ -223,20 +271,6 @@
       <div id="explorer-body"></div>
     </aside>
 
-    <section class="card">
-      <div class="card-head">
-        <h2>Your recurring mistakes</h2>
-        <button type="button" id="reset-mistakes" hidden>Reset</button>
-      </div>
-      <ul id="mistakes" class="bookmarks"></ul>
-      <p id="mistakes-sync" class="muted mistakes-sync"></p>
-    </section>
-
-    <section class="card">
-      <h2>Saved words</h2>
-      <ul id="bookmarks" class="bookmarks"></ul>
-    </section>
-
-    <script src="app.js?v=10" type="module"></script> <!-- bump with app.js changes, like styles.css above -->
+    <script src="app.js?v=11" type="module"></script> <!-- bump with app.js changes, like styles.css above -->
   </body>
 </html>

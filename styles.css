@@ -1,112 +1,282 @@
+/* ---------- design tokens ---------- */
+/* Warm paper light theme and a soft (not pure black) dark theme, both easy on the eyes. The
+   dark set applies when the device is dark (unless "light" is picked) or when "dark" is picked;
+   it is written twice because CSS can't share one block between those two selectors. */
 :root {
+  color-scheme: light;
   --bg: #f6f4ef;
   --surface: #ffffff;
-  --text: #1d1b16;
-  --muted: #6b665c;
-  --accent: #2f6fde;
+  --surface-2: #f1eee7;
+  --text: #22201b;
+  --muted: #69645a;
+  --border: #e3ded3;
+  --accent: #2f63d6;
   --accent-text: #ffffff;
-  --character: #eef3fc;
-  --learner: #fff4dc;
-  --good: #1f8a4c;
-  --warn: #b5541a;
-  --border: #e3dfd5;
+  --accent-soft: #e5ecfb;
+  --character: #e9eff9;
+  --learner: #fdf0d5;
+  --good: #1d7f47;
+  --good-soft: #e3f3e8;
+  --warn: #b0530f;
+  --warn-soft: #fbede1;
+  --danger: #d83a3f;
+  --shadow: 0 1px 2px rgb(40 30 10 / 0.05), 0 6px 18px rgb(40 30 10 / 0.06);
+  --radius: 16px;
+  --col: 760px; /* reading width of the call on wide screens */
 }
-
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #15171b;
-    --surface: #1f2227;
-    --text: #ecebe7;
-    --muted: #a19d94;
-    --accent: #6b9cff;
-    --accent-text: #0d1220;
-    --character: #22304a;
-    --learner: #3a3220;
-    --good: #5fd08f;
-    --warn: #f09a5f;
-    --border: #33373e;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121417;
+    --surface: #1b1e23;
+    --surface-2: #24282f;
+    --text: #e8e6e1;
+    --muted: #a19d95;
+    --border: #2f343c;
+    --accent: #7ba3ff;
+    --accent-text: #0b1222;
+    --accent-soft: #1f2b45;
+    --character: #1d293d;
+    --learner: #372e1f;
+    --good: #66d397;
+    --good-soft: #16301f;
+    --warn: #f1a068;
+    --warn-soft: #3a2617;
+    --danger: #e0484d;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.25);
   }
 }
-
-* { box-sizing: border-box; }
-
-body {
-  margin: 0 auto;
-  max-width: 720px;
-  padding: 16px;
-  background: var(--bg);
-  color: var(--text);
-  font: 16px/1.5 system-ui, sans-serif;
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121417;
+  --surface: #1b1e23;
+  --surface-2: #24282f;
+  --text: #e8e6e1;
+  --muted: #a19d95;
+  --border: #2f343c;
+  --accent: #7ba3ff;
+  --accent-text: #0b1222;
+  --accent-soft: #1f2b45;
+  --character: #1d293d;
+  --learner: #372e1f;
+  --good: #66d397;
+  --good-soft: #16301f;
+  --warn: #f1a068;
+  --warn-soft: #3a2617;
+  --danger: #e0484d;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.25);
 }
 
-h1 { font-size: 1.4rem; margin: 0; }
-h2 { font-size: 1.05rem; margin: 0 0 12px; }
+/* ---------- base ---------- */
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  padding: 16px 16px 24px;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+h1 { font-size: 1.35rem; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 1.1rem; margin: 0 0 14px; letter-spacing: -0.005em; }
+a { color: var(--accent); }
+.muted { color: var(--muted); }
+.muted a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.stats { display: flex; gap: 12px; font-weight: 600; }
+/* ---------- controls ---------- */
+button {
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  padding: 10px 16px;
+  min-height: 44px;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.1s, filter 0.15s;
+}
+button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+button:active:not(:disabled) { transform: scale(0.97); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+@media (hover: hover) {
+  button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  button.primary:hover:not(:disabled) { filter: brightness(1.07); }
+}
+
+label { display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; font-weight: 600; color: var(--muted); min-width: 0; }
+label[hidden] { display: none; }
+select,
+input:not([type="checkbox"]):not([type="file"]) {
+  font: inherit;
+  font-weight: 400;
+  color: var(--text);
+  background-color: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  min-height: 46px; /* comfortable touch targets; the 16px font avoids iOS zoom */
+  width: 100%;
+  min-width: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+select {
+  appearance: none;
+  padding-right: 38px;
+  text-overflow: ellipsis;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%238a857b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+}
+select:focus,
+input:not([type="checkbox"]):focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+::placeholder { color: var(--muted); opacity: 0.8; }
+.check { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; font-size: 0.95rem; font-weight: 400; color: var(--text); cursor: pointer; }
+.check input { width: 18px; height: 18px; margin: 3px 0 0; flex: none; accent-color: var(--accent); }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+.icon-btn { width: 40px; min-height: 40px; height: 40px; padding: 0; border-radius: 50%; display: grid; place-items: center; font-size: 1.05rem; }
+
+/* ---------- page layout ---------- */
+.topbar { max-width: 1120px; margin: 0 auto 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand img { display: block; border-radius: 8px; }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.layout { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
+/* Laptops: start a conversation on the left, your progress on the right. */
+@media (min-width: 960px) {
+  body { padding: 24px 24px 32px; }
+  .topbar { margin-bottom: 20px; }
+  .layout { grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); align-items: start; gap: 24px; }
+}
 
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: var(--radius);
+  padding: 20px;
   margin-bottom: 16px;
+  box-shadow: var(--shadow);
 }
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.card-head button { min-height: 32px; padding: 2px 12px; font-size: 0.85rem; }
+.keyline { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; font-size: 0.85rem; }
+.keyline button { min-height: 34px; padding: 4px 12px; font-size: 0.85rem; }
+#keygate label { margin-bottom: 14px; }
+#keygate .muted { font-weight: 400; }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
-label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; color: var(--muted); min-width: 0; }
-label[hidden] { display: none; }
-/* A select is as wide as its longest option by default; long scene names would push it off screen. */
-.grid select { width: 100%; min-width: 0; text-overflow: ellipsis; }
-.grid label:has(#scenario), .grid label:has(#tense) { grid-column: 1 / -1; } /* long names: give them the full row */
-select, input {
-  font: inherit;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px;
+/* ---------- start a conversation ---------- */
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.field { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.field-label { font-size: 0.85rem; font-weight: 600; color: var(--muted); }
+.setup > label { margin-bottom: 16px; }
+
+/* Level and conversation as tappable cards (the selects they drive are hidden). */
+.picker { display: grid; gap: 8px; }
+.picker-level { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.picker-mode { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 700px) { .picker-mode { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.picker button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1.5px solid transparent;
+  border-radius: 12px;
 }
+.picker-level button { align-items: center; justify-content: center; padding: 8px 4px; }
+.picker button[aria-checked="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.pick-icon { font-size: 1.25rem; line-height: 1.2; margin-bottom: 2px; }
+.pick-title { font-size: 0.95rem; }
+.pick-sub { font-size: 0.78rem; font-weight: 400; color: var(--muted); line-height: 1.3; }
 
-button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 10px 14px; min-height: 44px; -webkit-tap-highlight-color: transparent; }
-button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
-button:disabled { opacity: 0.5; cursor: progress; }
-select, input { min-height: 44px; } /* comfortable touch targets; 16px font avoids iOS zoom */
+.toggles { display: flex; flex-direction: column; gap: 12px; margin: 4px 0 16px; }
+.voice-status { margin: -4px 0 12px; font-size: 0.85rem; font-weight: 400; }
+.voice-status:empty { display: none; }
 
-#transcript { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 10px; }
-.msg { padding: 10px 14px; border-radius: 12px; max-width: 85%; }
-.msg.character { background: var(--character); align-self: flex-start; }
-.msg.learner { background: var(--learner); align-self: flex-end; }
-.msg .who { font-size: 0.75rem; color: var(--muted); display: block; }
-.msg .translation { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
-.msg .tools { display: flex; gap: 8px; margin-top: 6px; }
-.msg .tools button { padding: 2px 10px; font-size: 0.8rem; min-height: 32px; } /* small: they sit inside every reply */
-.msg .voice-note { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+/* Vocabulary and the Vocab Trainer: set up once, folded away afterwards. */
+.vocab { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); padding: 0 14px; }
+.vocab > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  font-weight: 600;
+}
+.vocab > summary::-webkit-details-marker { display: none; }
+.vocab > summary > :first-child { flex: 1; }
+.vocab > summary .muted { font-size: 0.85rem; font-weight: 500; }
+.vocab > summary::after { content: "▾"; color: var(--muted); transition: transform 0.2s; }
+.vocab[open] > summary::after { transform: rotate(180deg); }
+.vocab-body { padding-bottom: 14px; display: flex; flex-direction: column; gap: 10px; }
+.vocab-body p { margin: 0; }
+.vocab-head { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.vocab-body select, .vocab-body input:not([type="checkbox"]):not([type="file"]) { background-color: var(--surface); }
+.file-btn { flex-direction: row; cursor: pointer; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; font-size: 0.85rem; color: var(--text); }
+.trainer-link { display: flex; align-items: center; gap: 8px; }
+.trainer-link p { flex: 1; font-size: 0.85rem; }
+.trainer-link button { white-space: nowrap; font-size: 0.85rem; min-height: 36px; padding: 4px 12px; }
+.trainer-form { display: flex; flex-wrap: wrap; gap: 8px; }
+.trainer-form[hidden] { display: none; }
+.trainer-form input { flex: 1 1 160px; width: auto; }
+.trainer-form button { white-space: nowrap; }
+.vocab-url-row { display: flex; gap: 8px; }
+.vocab-url-row input { flex: 1; font-size: 0.85rem; }
+.vocab-url-row button { white-space: nowrap; font-size: 0.9rem; }
+#vocab-status { font-size: 0.85rem; }
 
-.word { cursor: pointer; border-radius: 4px; }
-.word:hover { text-decoration: underline; }
-.word.speaking { background: var(--accent); color: var(--accent-text); }
+/* Start stays in reach at the bottom of the screen while the settings scroll. */
+.start-bar {
+  position: sticky;
+  bottom: 0;
+  margin: 18px -20px -20px;
+  padding: 12px 20px calc(14px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-radius: 0 0 var(--radius) var(--radius);
+  box-shadow: 0 -10px 16px -12px rgb(0 0 0 / 0.25);
+  z-index: 1;
+}
+#start { width: 100%; min-height: 52px; font-size: 1.05rem; border-radius: 14px; }
 
-.coach { border-left: 4px solid var(--good); }
-.coach.has-correction { border-left-color: var(--warn); }
-.coach p { margin: 4px 0; }
+/* ---------- your progress ---------- */
+.bookmarks { list-style: none; margin: 0; padding: 0; }
+.bookmarks li { padding: 10px 0; border-top: 1px solid var(--border); }
+.bookmarks li:first-child { border-top: 0; padding-top: 0; }
+.bookmarks li.muted { font-size: 0.9rem; }
+.mistake-focus {
+  display: inline-block;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: 999px;
+  padding: 1px 9px;
+  vertical-align: 1px;
+}
+.mistake-example { font-size: 0.85rem; overflow-wrap: anywhere; margin-top: 2px; }
+.mistakes-sync { font-size: 0.8rem; margin: 12px 0 0; }
 
-/* Suggestions scroll sideways in one row so the dock stays short. */
-.chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
-.chips:empty { display: none; }
-.chips::-webkit-scrollbar { display: none; }
-.chips button { border-radius: 999px; font-size: 0.9rem; white-space: nowrap; flex: none; min-height: 38px; padding: 6px 14px; }
-
-.live { color: var(--muted); font-style: italic; }
-.live:empty { display: none; }
-
-.composer { display: flex; gap: 8px; }
-.composer input { flex: 1; min-width: 0; }
-
-.status { color: var(--muted); font-size: 0.85rem; margin: 0; }
-.status:empty { display: none; }
-
-/* ---------- conversation as a phone call ---------- */
+/* ---------- the conversation, as a phone call ---------- */
 body.in-call { overflow: hidden; }
 .call {
   position: fixed;
@@ -123,27 +293,32 @@ body.in-call { overflow: hidden; }
   background: var(--bg);
 }
 .call[hidden] { display: none; }
-.call > * { width: 100%; max-width: 720px; margin: 0 auto; }
+/* Full-width bars and scroll area; their content keeps a comfortable reading width. */
+.call-head, .call-scroll, .call-dock {
+  padding-left: max(16px, calc((100% - var(--col)) / 2));
+  padding-right: max(16px, calc((100% - var(--col)) / 2));
+}
 
 .call-head {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: max(12px, env(safe-area-inset-top)) 16px 12px;
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-bottom: 12px;
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 .avatar {
   flex: none;
-  width: 48px;
-  height: 48px;
+  width: 46px;
+  height: 46px;
   border-radius: 50%;
   display: grid;
   place-items: center;
   font-weight: 700;
-  font-size: 1.3rem;
-  background: var(--accent);
+  font-size: 1.25rem;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #b46cff));
   color: var(--accent-text);
-  transition: box-shadow 0.2s;
 }
 .call[data-state="speaking"] .avatar { animation: talk 1.2s ease-in-out infinite; }
 @keyframes talk {
@@ -151,36 +326,138 @@ body.in-call { overflow: hidden; }
   50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 0%, transparent); }
 }
 .caller { flex: 1; min-width: 0; }
-.caller-name { font-weight: 700; font-size: 1.1rem; line-height: 1.2; }
+.caller-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.caller-name { font-weight: 700; font-size: 1.1rem; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rapport { flex: none; font-size: 0.75rem; font-weight: 700; color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); border-radius: 999px; padding: 1px 8px; }
 .caller-sub { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #call-timer { font-variant-numeric: tabular-nums; }
+/* What's happening now, with a dot that pulses while the voice or the mic is active. */
 .call-state {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 0.8rem;
+  font-weight: 600;
   color: var(--muted);
-  border: 1px solid var(--border);
+  background: var(--surface-2);
   border-radius: 999px;
-  padding: 2px 10px;
+  padding: 4px 12px;
 }
-.call[data-state="listening"] .call-state { color: var(--warn); border-color: currentColor; }
-.call[data-state="speaking"] .call-state { color: var(--accent); border-color: currentColor; }
+.call-state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.call[data-state="speaking"] .call-state { color: var(--accent); background: var(--accent-soft); }
+.call[data-state="listening"] .call-state,
+.call[data-state="drill"] .call-state { color: var(--warn); background: var(--warn-soft); }
+.call[data-state="speaking"] .call-state::before,
+.call[data-state="listening"] .call-state::before { animation: blink 1s ease-in-out infinite; }
+.call[data-state="paused"] .call-state { color: var(--text); }
+.call[data-state="ended"] .call-state { color: var(--good); background: var(--good-soft); }
+@keyframes blink { 50% { opacity: 0.25; } }
 
-.call-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; overscroll-behavior: contain; }
-.call-scroll #transcript { margin-bottom: 12px; }
+.call-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-top: 16px; padding-bottom: 16px; overscroll-behavior: contain; }
+.call[data-state="paused"] .call-scroll { opacity: 0.6; }
+
+#transcript { list-style: none; padding: 0; margin: 0 0 14px; display: flex; flex-direction: column; gap: 12px; }
+.msg { padding: 10px 14px; border-radius: 18px; max-width: min(85%, 600px); animation: msg-in 0.25s ease-out; }
+.msg.character { background: var(--character); align-self: flex-start; border-bottom-left-radius: 6px; }
+.msg.learner { background: var(--learner); align-self: flex-end; border-bottom-right-radius: 6px; }
+.msg .who { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; color: var(--muted); display: block; margin-bottom: 1px; }
+.msg .translation { font-size: 0.88rem; font-style: italic; color: var(--muted); margin-top: 6px; padding-top: 6px; border-top: 1px dashed color-mix(in srgb, var(--muted) 35%, transparent); }
+.msg .tools { display: flex; gap: 6px; margin-top: 8px; }
+.msg .tools button { /* small and quiet: they sit inside every reply */
+  min-height: 30px;
+  padding: 3px 11px;
+  font-size: 0.8rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  border-color: color-mix(in srgb, var(--text) 14%, transparent);
+}
+.msg .voice-note { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+@keyframes msg-in { from { opacity: 0; transform: translateY(6px); } }
+
+.word { cursor: pointer; border-radius: 4px; transition: background-color 0.1s; }
+@media (hover: hover) { .word:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); } }
+.word.speaking { background: var(--accent); color: var(--accent-text); }
+
+/* "Mika is typing…" while the reply is on its way. */
+.call[data-state="thinking"] #transcript::after {
+  content: "";
+  align-self: flex-start;
+  width: 62px;
+  height: 38px;
+  border-radius: 18px 18px 18px 6px;
+  background:
+    radial-gradient(circle closest-side, var(--muted) 85%, transparent) no-repeat,
+    radial-gradient(circle closest-side, var(--muted) 85%, transparent) no-repeat,
+    radial-gradient(circle closest-side, var(--muted) 85%, transparent) no-repeat,
+    var(--character);
+  background-size: 8px 8px;
+  animation: msg-in 0.25s ease-out, typing 1.2s ease-in-out infinite;
+}
+@keyframes typing {
+  0%, 80%, 100% { background-position: 15px 50%, 27px 50%, 39px 50%; }
+  20% { background-position: 15px 30%, 27px 50%, 39px 50%; }
+  40% { background-position: 15px 50%, 27px 30%, 39px 50%; }
+  60% { background-position: 15px 50%, 27px 50%, 39px 30%; }
+}
+
+/* The coach: feedback on what the learner said, labelled so it reads as feedback. */
+.coach {
+  border-left: 4px solid var(--good);
+  padding: 12px 16px;
+  box-shadow: none;
+  animation: msg-in 0.25s ease-out;
+}
+.coach::before { content: "✓ Coach"; display: block; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--good); margin-bottom: 4px; }
+.coach.has-correction { border-left-color: var(--warn); }
+.coach.has-correction::before { content: "✎ Correction"; color: var(--warn); }
+.coach p { margin: 4px 0; }
+.coach strong { color: var(--warn); }
 .call-scroll .coach { margin-bottom: 0; }
 
+/* ---------- the dock: say-it-again, suggestions, composer, call buttons ---------- */
 .call-dock {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 16px max(12px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border);
+  gap: 10px;
+  padding-top: 12px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
   background: var(--surface);
+  border-top: 1px solid var(--border);
 }
 .call-dock .focus { margin: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .call-dock .focus-word { white-space: nowrap; }
+.focus { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; font-size: 0.85rem; }
+.focus-label { color: var(--muted); }
+.focus-word { background: var(--accent-soft); border-radius: 999px; padding: 2px 10px; }
 
-.call-controls { display: flex; justify-content: center; gap: 40px; padding-top: 4px; }
+/* Suggestions scroll sideways in one row so the dock stays short. */
+.chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+.chips:empty { display: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chips button {
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  flex: none;
+  min-height: 38px;
+  padding: 6px 14px;
+  background: var(--accent-soft);
+  border-color: transparent;
+  animation: msg-in 0.25s ease-out;
+}
+
+.live { color: var(--muted); font-style: italic; }
+.live:empty { display: none; }
+.status { color: var(--muted); font-size: 0.85rem; margin: 0; }
+.status:empty { display: none; }
+
+.composer { display: flex; gap: 8px; }
+.composer input:not([type="checkbox"]) { flex: 1; border-radius: 999px; padding-left: 18px; background-color: var(--surface-2); }
+.composer button { border-radius: 999px; padding: 10px 20px; }
+
+.call-controls { display: flex; justify-content: center; gap: 36px; padding-top: 2px; }
 .round {
   display: flex;
   flex-direction: column;
@@ -193,90 +470,78 @@ body.in-call { overflow: hidden; }
   color: var(--muted);
   font-size: 0.75rem;
 }
+.round:hover:not(:disabled), .round:active:not(:disabled) { background: none; transform: none; }
 .round svg {
-  width: 60px;
-  height: 60px;
-  padding: 16px;
+  width: 56px;
+  height: 56px;
+  padding: 15px;
   border-radius: 50%;
   fill: currentColor;
-  background: var(--bg);
+  background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text);
-  transition: background 0.15s, transform 0.1s;
+  transition: background-color 0.15s, transform 0.1s, box-shadow 0.15s;
 }
-.round:active svg { transform: scale(0.94); }
-.mic[aria-pressed="true"] svg { background: var(--warn); border-color: transparent; color: #fff; }
-.end svg { background: #e0393e; border-color: transparent; color: #fff; }
+@media (hover: hover) { .round:hover:not(:disabled) svg { box-shadow: 0 0 0 4px var(--accent-soft); } }
+.round:active:not(:disabled) svg { transform: scale(0.92); }
+.mic[aria-pressed="true"] svg { background: var(--warn); border-color: transparent; color: #fff; animation: ring 1.6s ease-out infinite; }
+@keyframes ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 55%, transparent); }
+  100% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--warn) 0%, transparent); }
+}
+.end svg { background: var(--danger); border-color: transparent; color: #fff; }
 .pause .icon-play, .pause[aria-pressed="true"] .icon-pause { display: none; }
 .pause[aria-pressed="true"] .icon-play { display: inline; }
 .pause[aria-pressed="true"] svg { background: var(--text); border-color: transparent; color: var(--bg); }
 .round:disabled { opacity: 0.4; }
-.call[data-state="paused"] .call-state { color: var(--text); border-color: currentColor; }
-.call[data-state="paused"] .call-scroll { opacity: 0.6; }
-
-.explorer { position: fixed; right: 16px; bottom: 16px; width: min(360px, calc(100% - 32px)); box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); z-index: 3; }
-.close { position: absolute; top: 8px; right: 8px; padding: 0 8px; }
-
-.bookmarks { margin: 0; padding-left: 18px; }
-.bookmarks li { margin-bottom: 4px; }
-.bookmarks .muted { color: var(--muted); }
-
-.muted { color: var(--muted); }
-.muted a { color: var(--accent); }
-.keyline { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; font-size: 0.85rem; }
-
-.voice-status { margin: -4px 0 12px; font-size: 0.85rem; }
-.voice-status:empty { display: none; }
-.vocab { border-top: 1px solid var(--border); padding-top: 12px; margin-bottom: 16px; }
-.vocab-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.file-btn { display: inline-block; cursor: pointer; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 0.9rem; }
-.trainer-link { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.trainer-link p { flex: 1; margin: 0; font-size: 0.85rem; }
-.trainer-link button { white-space: nowrap; font-size: 0.85rem; }
-.trainer-form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-.trainer-form[hidden] { display: none; }
-.trainer-form input { flex: 1 1 150px; min-width: 0; font-size: 0.9rem; }
-.trainer-form button { white-space: nowrap; font-size: 0.9rem; }
-.vocab-url-row { display: flex; gap: 8px; margin-bottom: 8px; }
-.vocab-url-row input { flex: 1; min-width: 0; font-size: 0.85rem; }
-.vocab-url-row button { white-space: nowrap; font-size: 0.9rem; }
-.check { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--text); }
-.check input { min-height: auto; width: auto; }
 
 /* Say it again: the corrected sentence to repeat before the reply comes. */
-.drill { border: 1px solid var(--warn); border-radius: 12px; padding: 10px 12px; background: var(--bg); }
+.drill {
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: var(--warn-soft);
+  animation: msg-in 0.25s ease-out;
+}
 .drill[hidden] { display: none; }
 .drill p { margin: 0; }
-.drill-label { font-size: 0.8rem; color: var(--muted); }
-.drill .drill-target { font-size: 1.1rem; font-weight: 600; margin: 2px 0 6px; }
-.drill .drill-feedback { font-size: 0.85rem; color: var(--warn); margin-bottom: 6px; }
+.drill-label { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--warn); }
+.drill .drill-target { font-size: 1.15rem; font-weight: 600; margin: 4px 0 8px; }
+.drill .drill-feedback { font-size: 0.88rem; color: var(--warn); margin-bottom: 8px; }
 .drill-feedback:empty { display: none; }
 .drill .drill-feedback.ok { color: var(--good); }
-.drill-actions { display: flex; gap: 8px; }
-.drill-actions button { min-height: 38px; padding: 6px 12px; font-size: 0.9rem; }
-.call[data-state="drill"] .call-state { color: var(--warn); border-color: currentColor; }
+.drill-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.drill-actions button { min-height: 40px; padding: 6px 14px; font-size: 0.9rem; border-radius: 999px; }
+.drill-actions button:not(.primary) { background: var(--surface); }
 
-.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.card-head button { min-height: 32px; padding: 2px 10px; font-size: 0.85rem; }
-.mistake-focus { display: inline-block; white-space: nowrap; font-size: 0.75rem; color: var(--warn); border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; }
-.mistake-example { font-size: 0.85rem; overflow-wrap: anywhere; }
-.say-again { margin-bottom: 12px; }
-.mistakes-sync { font-size: 0.8rem; margin: 8px 0 0; }
+/* ---------- word explorer ---------- */
+.explorer {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  width: min(380px, calc(100% - 32px));
+  box-shadow: 0 16px 48px rgb(0 0 0 / 0.28);
+  z-index: 3;
+  animation: msg-in 0.2s ease-out;
+}
+.explorer h2 { margin: 0 40px 6px 0; font-size: 1.2rem; }
+.explorer p { margin: 6px 0; }
+.explorer .tools { display: flex; gap: 8px; margin-top: 12px; }
+/* Wider screens: open at the top right, clear of the composer and Send. */
+@media (min-width: 561px) { .explorer { top: 86px; bottom: auto; } }
+.close { position: absolute; top: 12px; right: 12px; width: 36px; height: 36px; min-height: 0; padding: 0; border-radius: 50%; font-size: 1.2rem; line-height: 1; }
 
-.focus { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; font-size: 0.85rem; }
-.focus-label { color: var(--muted); }
-.focus-word { background: var(--character); border-radius: 999px; padding: 2px 10px; }
-
-/* Phones */
+/* ---------- phones ---------- */
 @media (max-width: 560px) {
-  body { padding: 12px; }
-  .topbar { flex-wrap: wrap; gap: 6px; }
+  body { padding: 12px 12px 0; }
   h1 { font-size: 1.2rem; }
-  .card { padding: 12px; border-radius: 10px; }
-  .grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
-  .msg { max-width: 92%; }
-  .call-scroll { padding: 12px; }
-  .call-dock { padding-left: 12px; padding-right: 12px; }
+  .card { padding: 16px; border-radius: 14px; }
+  .start-bar { margin: 16px -16px -16px; padding-left: 16px; padding-right: 16px; }
+  .grid { gap: 10px; }
+  .msg { max-width: 90%; }
+  .call-scroll { padding-top: 12px; padding-bottom: 12px; }
+  .call-head, .call-scroll, .call-dock { padding-left: 12px; padding-right: 12px; }
+  .call-controls { gap: 32px; }
   /* While typing, the keyboard is up: fold away the big round controls and the vocab
      row so the input sits right above the keyboard with the transcript still visible. */
   body.typing .call-controls,
@@ -289,6 +554,7 @@ body.in-call { overflow: hidden; }
   body.typing .caller-name { font-size: 0.95rem; }
   body.typing .call-scroll { padding-top: 8px; padding-bottom: 8px; }
   body.typing .coach { padding: 8px 12px; font-size: 0.85rem; cursor: pointer; }
+  body.typing .coach::before { margin-bottom: 0; }
   body.typing .coach:not(.expanded) p:not(:first-child) { display: none; }
   body.typing .coach:not(.expanded) p:first-child {
     display: -webkit-box;
@@ -298,15 +564,21 @@ body.in-call { overflow: hidden; }
   }
   body.typing .coach:not(.expanded):has(p + p)::after { content: "Tap for more"; display: block; font-size: 0.75rem; color: var(--muted); }
   body.typing .chips button { min-height: 34px; padding: 4px 12px; font-size: 0.85rem; }
-  /* Word explorer becomes a bottom sheet so it never covers the composer awkwardly */
-  /* Its bottom edge follows the visible area (see --vvh/--vvtop in app.js), so with the
-     keyboard up the sheet sits just above it instead of hiding behind it. */
+  /* The word explorer becomes a bottom sheet. Its bottom edge follows the visible area
+     (see --vvh/--vvtop in app.js), so with the keyboard up it sits just above it instead
+     of hiding behind it. */
   .explorer {
     left: 0; right: 0; bottom: auto; width: 100%;
     top: calc(var(--vvtop, 0px) + var(--vvh, 100dvh));
     transform: translateY(-100%);
-    border-radius: 14px 14px 0 0;
+    border-radius: 18px 18px 0 0;
     max-height: calc(var(--vvh, 100dvh) * 0.7); overflow-y: auto;
+    animation: none;
   }
+  .explorer::before { content: ""; display: block; width: 38px; height: 4px; border-radius: 2px; background: var(--border); margin: -6px auto 12px; }
 }
-#keygate label { margin-bottom: 12px; }
+
+/* People who asked their device for less motion get none. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
