@@ -435,6 +435,7 @@ const MISTAKE_TYPES = {
   negation: "negation (nicht or kein)",
   plural: "plural forms",
   word_choice: "word choice",
+  tense: "tense (another tense where the one being practised was needed)",
   other: "other",
 };
 const MISTAKE_HALF_LIFE_DAYS = 7; // a mistake counts half as much a week later
@@ -569,6 +570,12 @@ function personaFor({ scenario, mode }) {
 function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, tense }, targetWords = [], learnt = false, learnerMessage = "", weakSpots = []) {
   const m = MODES[mode] ?? MODES.scene;
   const persona = personaFor({ scenario, mode });
+  const t = TENSES[tense];
+  // In tense practice, an answer in another tense is a mistake too: it gets a correction,
+  // so the learner says it again in the tense being practised.
+  const tenseMistake = t
+    ? ` or does not use ${t.short} where your question called for it (then coach.correction is the learner's message rewritten in ${t.short}, keeping their meaning and words; if it is only a fragment, make it the short full sentence they most likely meant, and list tense in coach.mistakes)`
+    : "";
   const lines = [
     `You are ${persona.character}, ${persona.setting}. Stay in character and speak only ${language}.`,
     `The learner speaks ${language} at CEFR level ${level}; their native language is ${nativeLanguage}.`,
@@ -578,17 +585,16 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, ten
     "Speech recognition produced the learner's message, so ignore missing punctuation and obvious transcription slips.",
     `Write reply_translation, coach.tip and nothing else in ${nativeLanguage}.`,
     learnerMessage
-      ? `Fill coach first, before writing your reply. It judges only the learner's last message, which is exactly: ${JSON.stringify(learnerMessage)}. Give a correction only when that text has a real grammar or word-choice mistake; coach.correction is then only the sentence(s) with the mistake, rewritten correctly in ${language}, with no explanation (that goes in coach.tip). With every correction, list in coach.mistakes each kind of mistake it fixes: ${Object.entries(MISTAKE_TYPES).map(([k, d]) => `${k} = ${d}`).join("; ")}. Without a correction, leave coach.mistakes empty. coach.tip may praise or explain something that literally appears in that text; never credit the learner with words, tenses or grammar that are not in it, such as those in your own replies, your suggestions or practice words they did not use. If there is nothing useful to say, leave coach.tip empty.`
+      ? `Fill coach first, before writing your reply. It judges only the learner's last message, which is exactly: ${JSON.stringify(learnerMessage)}. Give a correction only when that text has a real grammar or word-choice mistake${tenseMistake}; coach.correction is then only the sentence(s) with the mistake, rewritten correctly in ${language}, with no explanation (that goes in coach.tip). With every correction, list in coach.mistakes each kind of mistake it fixes: ${Object.entries(MISTAKE_TYPES).map(([k, d]) => `${k} = ${d}`).join("; ")}. Without a correction, leave coach.mistakes empty. coach.tip may praise or explain something that literally appears in that text; never credit the learner with words, tenses or grammar that are not in it, such as those in your own replies, your suggestions or practice words they did not use. If there is nothing useful to say, leave coach.tip empty.`
       : "There is no learner message to judge yet: leave coach.correction, coach.mistakes and coach.tip empty.",
     "Your reply is read aloud, so let your feelings show in the words: react like a real person with short interjections (for example Oh!, Ach wirklich?, Super!, Oh nein!) and use ! and ? where you mean them.",
     `Set mood to how the reply should sound: ${MOODS.join(", ")}. Use amused for fun or happy replies, surprised for amazement, angry only when the role calls for annoyance, sleepy for tiredness, whisper for secrets, and neutral otherwise.`,
   ];
-  const t = TENSES[tense];
   if (t) {
     lines.push(
       `The learner wants to practise ${t.form}. Use this tense yourself wherever it fits, and keep steering the conversation so that the natural answer to your question needs it: ask about ${t.ask}. Your very first question, right after the greeting, should already need this tense. Stay in your role while doing so.`,
       "Write the suggestions in this tense.",
-      "Check every learner message for this tense. If they used another tense where it was expected, or formed it wrongly (wrong auxiliary, wrong participle or ending), put the whole sentence corrected into this tense in coach.correction, even if it is otherwise understandable. When their message does use it correctly, say so briefly in coach.tip.",
+      "A message in another tense, or with this tense formed wrongly (wrong auxiliary, wrong participle or ending), always gets a coach.correction in this tense, even when it is otherwise correct German; never only a tip. When their message does use it correctly, say so briefly in coach.tip.",
     );
   }
   if (targetWords.length && learnt) {
@@ -819,42 +825,42 @@ function startListening() {
     setStatus("Voice input needs Chrome or Edge. You can still type.");
     return;
   }
+  if (recognizer) return; // one listening session at a time
   stopSpeaking();
-  recognizer = new Recognition();
-  recognizer.lang = state.settings.locale;
-  recognizer.interimResults = true;
+  // This session's recognizer: its handlers and pause timer use it, not the shared variable,
+  // so a session that ends late (e.g. aborted by "Hear it") can't unhook the next one.
+  const rec = new Recognition();
+  recognizer = rec;
+  rec.lang = state.settings.locale;
+  rec.interimResults = true;
   // Keep listening through pauses; a longer silence ends the turn.
-  recognizer.continuous = true;
+  rec.continuous = true;
 
-  let finalText = "";
+  // Everything heard so far, rebuilt from all the results each time. Safari on iPhone often
+  // never marks results final, and a session can end by itself before they are, so interim
+  // text counts too (rebuilding means a result sent again isn't counted twice).
+  let heard = "";
   let silenceTimer = null;
-  const armSilence = () => {
+  rec.onresult = (event) => {
+    heard = Array.from(event.results, (result) => result[0].transcript).join(" ").replace(/\s+/g, " ").trim();
+    $("live").textContent = heard;
+    if (!heard) return;
+    // Any speech restarts the pause timer: after a pause the turn ends. You get time to think.
     clearTimeout(silenceTimer);
-    // Auto-stop after a pause so the turn sends hands-free. You get time to think.
-    silenceTimer = setTimeout(() => recognizer?.stop(), SILENCE_MS);
+    silenceTimer = setTimeout(() => rec.stop(), SILENCE_MS);
   };
-
-  recognizer.onresult = (event) => {
-    let interim = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i];
-      if (result.isFinal) finalText += result[0].transcript + " ";
-      else interim += result[0].transcript;
-    }
-    $("live").textContent = (finalText + interim).trim();
-    if (finalText.trim()) armSilence();
-  };
-  recognizer.onerror = (event) => {
+  rec.onerror = (event) => {
     if (event.error === "no-speech") setStatus("I'm listening… take your time.");
     else if (event.error === "not-allowed") { state.handsFree = false; setStatus("Microphone permission was denied."); }
     else if (event.error !== "aborted") setStatus(`Speech recognition error: ${event.error}`);
   };
-  recognizer.onend = () => {
+  rec.onend = () => {
     clearTimeout(silenceTimer);
+    if (recognizer !== rec) return;
     recognizer = null;
     setMic(false);
     $("live").textContent = "";
-    const spoken = finalText.trim();
+    const spoken = heard;
     if (dropNextResult) {
       dropNextResult = false; // cut short on purpose (e.g. "Hear it" or Skip in a drill)
     } else if (state.paused) {
@@ -875,7 +881,16 @@ function startListening() {
       setStatus("");
     }
   };
-  recognizer.start();
+  try {
+    rec.start();
+  } catch (error) {
+    // The browser refused to start (e.g. the microphone is still busy): say so, don't pretend to listen.
+    recognizer = null;
+    state.handsFree = false;
+    setMic(false);
+    setStatus(`The microphone didn't start (${error.message}). Tap the mic to try again.`);
+    return;
+  }
   setMic(true);
   setStatus("Listening… just talk. Tap the mic to stop hands-free.");
 }
