@@ -29,6 +29,8 @@ Typing works in any browser.
 - **Coach** corrections and tips each turn, **suggestions**, per-message **translation**.
 - **Word explorer**: tap any word for meaning, pronunciation and an example; save it.
 - **Streaks** and a per-scene rapport score (stored per browser).
+- **Tense practice**: pick a tense (Präsens, Perfekt, Präteritum, Futur I). Your partner asks questions that
+  need it and uses it too, the suggestions are in it, and the coach corrects any answer in the wrong tense.
 - **Your learnt words**: under "My vocabulary", connect the
   [Deutsch Vocab Trainer](https://deutsch-vocab-trainer-v2-1.onrender.com/) with its email and password (or in
   the trainer, tap your initial → **practise in Talkloop**). Talkloop logs in once, keeps only a read-only link

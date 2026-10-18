@@ -58,7 +58,7 @@ label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; colo
 label[hidden] { display: none; }
 /* A select is as wide as its longest option by default; long scene names would push it off screen. */
 .grid select { width: 100%; min-width: 0; text-overflow: ellipsis; }
-.grid label:has(#scenario) { grid-column: 1 / -1; } /* scene names are long: give them the full row */
+.grid label:has(#scenario), .grid label:has(#tense) { grid-column: 1 / -1; } /* long names: give them the full row */
 select, input {
   font: inherit;
   color: var(--text);

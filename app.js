@@ -211,6 +211,32 @@ const MODES = {
   },
 };
 
+// Tense practice: the partner steers the talk so the learner has to use this tense,
+// and the coach checks it. "any" adds nothing.
+const TENSES = {
+  any: null,
+  present: {
+    short: "Präsens",
+    form: "the present tense (in German the Präsens: ich spiele, du fährst, er ist)",
+    ask: "what the learner usually does, their routines, likes, family, job and what is happening right now",
+  },
+  perfekt: {
+    short: "Perfekt",
+    form: "the spoken past (in German the Perfekt: haben or sein + Partizip II, e.g. ich habe gekocht, ich bin gefahren)",
+    ask: "what the learner did yesterday, last weekend, on their last holiday or at work this week",
+  },
+  praeteritum: {
+    short: "Präteritum",
+    form: "the simple past used for telling stories (in German the Präteritum: ich ging, ich machte, ich war, ich hatte, ich konnte)",
+    ask: "stories: their childhood, how something happened, a film or book they remember, an adventure",
+  },
+  future: {
+    short: "Futur I",
+    form: "the future (in German Futur I: werden + infinitive, e.g. ich werde reisen)",
+    ask: "the learner's plans for tonight, the weekend, next year, and their dreams",
+  },
+};
+
 // ---------- Vocabulary (user-imported, stored locally in IndexedDB) ----------
 const VOCAB_DB = "talkloop";
 const VOCAB_KV = "kv";
@@ -429,7 +455,7 @@ function personaFor({ scenario, mode }) {
   return m.usesScene ? SCENARIOS[scenario] ?? SCENARIOS.cafe : PARTNER;
 }
 
-function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, targetWords = [], learnt = false) {
+function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, tense }, targetWords = [], learnt = false) {
   const m = MODES[mode] ?? MODES.scene;
   const persona = personaFor({ scenario, mode });
   const lines = [
@@ -444,6 +470,14 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, t
     "Your reply is read aloud, so let your feelings show in the words: react like a real person with short interjections (for example Oh!, Ach wirklich?, Super!, Oh nein!) and use ! and ? where you mean them.",
     `Set mood to how the reply should sound: ${MOODS.join(", ")}. Use amused for fun or happy replies, surprised for amazement, angry only when the role calls for annoyance, sleepy for tiredness, whisper for secrets, and neutral otherwise.`,
   ];
+  const t = TENSES[tense];
+  if (t) {
+    lines.push(
+      `The learner wants to practise ${t.form}. Use this tense yourself wherever it fits, and keep steering the conversation so that the natural answer to your question needs it: ask about ${t.ask}. Your very first question, right after the greeting, should already need this tense. Stay in your role while doing so.`,
+      "Write the suggestions in this tense.",
+      "Check every learner message for this tense. If they used another tense where it was expected, or formed it wrongly (wrong auxiliary, wrong participle or ending), put the whole sentence corrected into this tense in coach.correction, even if it is otherwise understandable. When they use it correctly, say so briefly in coach.tip.",
+    );
+  }
   if (targetWords.length && learnt) {
     const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
     lines.push(
@@ -1425,9 +1459,10 @@ function enterCall() {
   const mode = MODES[request.mode] ?? MODES.scene;
   $("call-avatar").textContent = characterName.split(" ").at(-1).charAt(0); // "Dr. Weber" -> W
   $("call-name").textContent = characterName;
-  $("call-mode").textContent = mode.usesScene
+  const tense = TENSES[request.tense];
+  $("call-mode").textContent = (mode.usesScene
     ? `${$("scenario").selectedOptions[0].textContent.split(" — ")[0]} · ${request.language}`
-    : `${mode.label.split(" — ")[0]} · ${request.language}`;
+    : `${mode.label.split(" — ")[0]} · ${request.language}`) + (tense ? ` · ${tense.short}` : "");
   document.body.classList.add("in-call");
   $("conversation").hidden = false;
   startCallTimer();
@@ -1639,6 +1674,7 @@ $("start").addEventListener("click", async () => {
       level: $("level").value,
       scenario,
       mode,
+      tense: $("tense").value,
     },
   };
   bumpStreak();
