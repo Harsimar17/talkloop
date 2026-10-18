@@ -1354,7 +1354,12 @@ function setStatus(text) {
 
 function setBusy(busy) {
   state.busy = busy;
-  for (const el of $("composer").querySelectorAll("button, input")) el.disabled = busy || state.finished || state.paused;
+  // Only the buttons are disabled while a reply loads, so a second turn can't be fired
+  // mid-reply. The text box stays enabled (and focused) so the keyboard — and the compact
+  // typing layout — don't collapse, and the learner can start composing their next turn.
+  // It's only locked once the scene is finished or the call is on hold.
+  for (const el of $("composer").querySelectorAll("button")) el.disabled = busy || state.finished || state.paused;
+  $("text").disabled = state.finished || state.paused;
   updateCallState();
 }
 
@@ -1803,6 +1808,8 @@ $("language").addEventListener("change", preloadSelectedVoice);
 
 $("composer").addEventListener("submit", (event) => {
   event.preventDefault();
+  // A reply is still loading (or the call is finished/on hold): keep what's typed.
+  if (state.busy || state.finished || state.paused) return;
   const text = $("text").value.trim();
   if (!text) return;
   $("text").value = "";
