@@ -55,6 +55,7 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; color: var(--muted); min-width: 0; }
+label[hidden] { display: none; }
 /* A select is as wide as its longest option by default; long scene names would push it off screen. */
 .grid select { width: 100%; min-width: 0; text-overflow: ellipsis; }
 .grid label:has(#scenario) { grid-column: 1 / -1; } /* scene names are long: give them the full row */
@@ -224,6 +225,9 @@ body.in-call { overflow: hidden; }
 .vocab { border-top: 1px solid var(--border); padding-top: 12px; margin-bottom: 16px; }
 .vocab-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .file-btn { display: inline-block; cursor: pointer; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 0.9rem; }
+.trainer-link { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.trainer-link p { flex: 1; margin: 0; font-size: 0.85rem; }
+.trainer-link button { white-space: nowrap; font-size: 0.85rem; }
 .vocab-url-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .vocab-url-row input { flex: 1; min-width: 0; font-size: 0.85rem; }
 .vocab-url-row button { white-space: nowrap; font-size: 0.9rem; }
@@ -252,3 +256,4 @@ body.in-call { overflow: hidden; }
     max-height: 70vh; overflow-y: auto;
   }
 }
+#keygate label { margin-bottom: 12px; }

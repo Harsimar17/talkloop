@@ -2,14 +2,20 @@
 
 Practise speaking a language with an AI character — live voice input, native-sounding
 spoken replies, coaching, translations and a word explorer. It runs **entirely in your
-browser** and talks to Google Gemini with **your own API key**, so it's free to host as a
+browser** and talks to Mistral (or Google Gemini) with **your own free API key**, so it's free to host as a
 static site (e.g. GitHub Pages).
 
 ## Use it
 
 1. Open the page(https://harsimar17.github.io/talkloop/).
-2. Paste a **Gemini API key** (free from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
-   The key is stored only in your browser (`localStorage`) and is sent only to Google.
+2. Pick the AI and paste its free key:
+   - **Mistral** (recommended, best German): key from [console.mistral.ai](https://console.mistral.ai/api-keys)
+     on the free Experiment plan. Optionally add a **Groq** key ([console.groq.com](https://console.groq.com/keys)),
+     used automatically when Mistral is busy.
+   - **Gemini**: key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey). A Gemini key is
+     also used as the backup voice.
+
+   Keys are stored only in your browser (`localStorage`) and are sent only to their own service.
 3. Pick a language, level and scene, and start talking.
 
 Use **Chrome or Edge** for voice input (they provide the microphone speech recognition).
@@ -23,6 +29,11 @@ Typing works in any browser.
 - **Coach** corrections and tips each turn, **suggestions**, per-message **translation**.
 - **Word explorer**: tap any word for meaning, pronunciation and an example; save it.
 - **Streaks** and a per-scene rapport score (stored per browser).
+- **Your learnt words**: in the [Deutsch Vocab Trainer](https://deutsch-vocab-trainer-v2-1.onrender.com/), tap
+  your initial → **practise in Talkloop**. Talkloop then gets a read-only link to the words you have learnt
+  there. Your partner works every A1 and A2 word into the conversation, but for B1 only the words you have
+  learnt (shakiest first), so you practise using them; the coach checks how you used them. Without the link,
+  the whole vocabulary list is used.
 
 ## Host it free on GitHub Pages
 
@@ -40,11 +51,13 @@ Typing works in any browser.
    branch **main**, folder **/ (root)**, then **Save**.
 3. After a minute your app is live at `https://<you>.github.io/<repo>/`.
 
-Every visitor enters their own Gemini key, so you never ship a key and there's no server to run.
+Every visitor enters their own keys, so you never ship a key and there's no server to run.
 
 ## Models used
 
-- Conversation: `gemini-flash-lite-latest` (cheapest, highest free limits)
+- Conversation (Mistral): `mistral-small-latest`, falling back to Groq's `openai/gpt-oss-120b`
+  when Mistral is rate-limited or busy
+- Conversation (Gemini): `gemini-flash-latest`, falling back to `gemini-flash-lite-latest`
 - Speech (default): [Piper](https://github.com/rhasspy/piper), an open-source voice that runs on
   the device (`piper.js`). The voice (German: "Thorsten", ~63 MB plus ~18 MB of pronunciation
   data) downloads when you start your first conversation and is then stored in the browser.

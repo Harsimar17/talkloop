@@ -55,25 +55,58 @@ function renderStats() {
   $("rapport").textContent = `♥ ${state.rapport}`;
 }
 
-// ---------- Gemini API (called directly from the browser with the user's key) ----------
-const CONV_MODEL = "gemini-flash-lite-latest";
+// ---------- AI services (called directly from the browser with the user's own keys) ----------
+// Conversation runs on Mistral (best German of the free tiers, with Groq as a backup when
+// Mistral is busy) or on Gemini. Gemini is also the backup voice when Piper can't speak.
+const CONV_MODEL = "gemini-flash-latest";
+const CONV_FALLBACK_MODEL = "gemini-flash-lite-latest";
 const TTS_MODEL = "gemini-3.8-flash-tts";
 const TTS_VOICE = "Kore";
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
-function getKey() {
+const MISTRAL = { name: "Mistral", url: "https://api.mistral.ai/v1/chat/completions", model: "mistral-small-latest" };
+const GROQ = {
+  name: "Groq",
+  url: "https://api.groq.com/openai/v1/chat/completions",
+  model: "openai/gpt-oss-120b",
+  extra: { reasoning_effort: "low" }, // keep replies quick enough for a conversation
+};
+
+const memoryKeys = {}; // fallback when localStorage is unavailable
+function getKey(service = "gemini") {
   try {
-    return localStorage.getItem("gemini_key") || "";
+    return localStorage.getItem(`${service}_key`) || "";
   } catch {
-    return "";
+    return memoryKeys[service] || "";
   }
 }
-function setKey(k) {
+function setKey(service, k) {
+  memoryKeys[service] = k;
   try {
-    if (k) localStorage.setItem("gemini_key", k);
-    else localStorage.removeItem("gemini_key");
+    if (k) localStorage.setItem(`${service}_key`, k);
+    else localStorage.removeItem(`${service}_key`);
   } catch {
     // storage unavailable; key lives only for this page load
+  }
+}
+
+// Which service runs the conversation. People who only ever saved a Gemini key stay on Gemini.
+function getProvider() {
+  let saved = "";
+  try {
+    saved = localStorage.getItem("talkloop_provider") || "";
+  } catch {
+    saved = memoryKeys.provider || "";
+  }
+  if (saved === "mistral" || saved === "gemini") return saved;
+  return getKey("gemini") && !getKey("mistral") ? "gemini" : "mistral";
+}
+function setProvider(p) {
+  memoryKeys.provider = p;
+  try {
+    localStorage.setItem("talkloop_provider", p);
+  } catch {
+    // storage unavailable
   }
 }
 
@@ -256,31 +289,82 @@ async function vocabMeta() {
   return { count: words.length, levels: [...new Set(words.map((w) => w.level))].sort() };
 }
 
-// In-memory state for the active session.
-let vocabWords = [];
-let vocabPointer = 0;
-let vocabSeen = new Set();
-
-async function loadVocabForSession(levels) {
-  const all = (await idbGet("vocab_words")) ?? [];
-  vocabWords = all.filter((w) => levels.includes(w.level));
-  for (let i = vocabWords.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [vocabWords[i], vocabWords[j]] = [vocabWords[j], vocabWords[i]];
-  }
-  vocabSeen = new Set((await idbGet("vocab_seen")) ?? []);
-  vocabPointer = 0;
-  return vocabWords.length;
+// ---------- Link to the Vocab Trainer (only the words learnt there) ----------
+// The trainer's "practise in Talkloop" opens this page with #vocab-link=…&vocab-api=…:
+// a read-only link to the learner's learnt words. It is kept here and the
+// fragment is wiped from the address bar.
+function takeTrainerLinkFromUrl() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const token = params.get("vocab-link");
+  const api = params.get("vocab-api");
+  if (!token || !/^https?:\/\//.test(api ?? "")) return false;
+  store.set("trainer_link", { token, api: api.replace(/\/+$/, "") });
+  history.replaceState(null, "", location.pathname + location.search);
+  return true;
 }
 
-// Pick the next rotating batch of words to weave into the conversation.
-function nextVocabBatch(n = 12) {
-  if (!vocabWords.length) return [];
-  const batch = [];
-  for (let scanned = 0; batch.length < n && scanned < vocabWords.length; scanned++) {
-    batch.push(vocabWords[vocabPointer % vocabWords.length]);
-    vocabPointer++;
+function trainerLink() {
+  return store.get("trainer_link", null);
+}
+
+// Learnt words, the least secure first (the trainer sorts them).
+async function fetchLearntWords() {
+  const link = trainerLink();
+  const res = await fetch(`${link.api}/api/talkloop/words`, { headers: { Authorization: `Bearer ${link.token}` } });
+  if (res.status === 401) {
+    store.set("trainer_link", null);
+    throw new Error("The link to the Vocab Trainer has expired. Link it again from the trainer.");
   }
+  if (!res.ok) throw new Error(`Vocab Trainer answered ${res.status}`);
+  const { words } = await res.json();
+  return words.map((w) => ({ de: w.de, en: w.en ?? "", example: w.example ?? "", level: w.lvl, cat: w.cat }));
+}
+
+// In-memory state for the active session.
+// Each pool rotates on its own, so a small pool keeps coming back next to a big one.
+let vocabPools = []; // [{ words, pointer }]
+let vocabSeen = new Set();
+
+// The levels counted as known when linked to the trainer: all their words are used.
+// Higher levels use only the words learnt in the trainer.
+const KNOWN_LEVELS = ["A1", "A2"];
+
+function shuffled(list) {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+// learnt (linked to the trainer): every A1/A2 word, shuffled, plus the learnt B1 words
+// in the trainer's order so the shakiest come up first. Otherwise the imported list, shuffled.
+async function loadVocabForSession(levels, learnt = null) {
+  const all = ((await idbGet("vocab_words")) ?? []).filter((w) => levels.includes(w.level));
+  if (learnt) {
+    const higher = learnt.filter((w) => levels.includes(w.level) && !KNOWN_LEVELS.includes(w.level));
+    const known = shuffled(all.filter((w) => KNOWN_LEVELS.includes(w.level)));
+    vocabPools = [higher, known];
+  } else {
+    vocabPools = [shuffled(all)];
+  }
+  vocabPools = vocabPools.filter((words) => words.length).map((words) => ({ words, pointer: 0 }));
+  vocabSeen = new Set((await idbGet("vocab_seen")) ?? []);
+  return vocabPools.reduce((sum, p) => sum + p.words.length, 0);
+}
+
+// Pick the next rotating batch of words to weave into the conversation, shared
+// evenly between the pools (the learnt B1 words first).
+function nextVocabBatch(n = 12) {
+  const batch = [];
+  vocabPools.forEach((pool, i) => {
+    const share = Math.min(pool.words.length, Math.ceil((n - batch.length) / (vocabPools.length - i)));
+    for (let k = 0; k < share; k++) {
+      batch.push(pool.words[pool.pointer % pool.words.length]);
+      pool.pointer++;
+    }
+  });
   batch.forEach((w) => vocabSeen.add(w.de));
   idbSet("vocab_seen", [...vocabSeen]).catch(() => {});
   return batch;
@@ -321,7 +405,7 @@ function personaFor({ scenario, mode }) {
   return m.usesScene ? SCENARIOS[scenario] ?? SCENARIOS.cafe : PARTNER;
 }
 
-function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, targetWords = []) {
+function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, targetWords = [], learnt = false) {
   const m = MODES[mode] ?? MODES.scene;
   const persona = personaFor({ scenario, mode });
   const lines = [
@@ -334,7 +418,14 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, t
     `Write reply_translation, coach.tip and nothing else in ${nativeLanguage}.`,
     "Give a correction only when the learner made a real grammar or word-choice mistake.",
   ];
-  if (targetWords.length) {
+  if (targetWords.length && learnt) {
+    const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
+    lines.push(
+      `The learner already knows these words but now needs to practise using them when speaking: ${list}.`,
+      "Otherwise speak as you normally would: you are not limited to these words. Use one or two of them naturally in your reply, and steer the conversation so the learner gets to use them too, for example with a question whose natural answer needs one of them. Never list or quiz the words.",
+      "When the learner uses one of these words, check it: if it is right, say so briefly in coach.tip; if the meaning, article or form is wrong, give the fix in coach.correction.",
+    );
+  } else if (targetWords.length) {
     const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
     lines.push(
       `The learner is practising this vocabulary. Naturally weave two to four of these words or phrases into your reply where they fit — do not force all of them, keep it natural, and give the learner a chance to use them too: ${list}.`,
@@ -343,26 +434,92 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, t
   return lines.join("\n");
 }
 
-async function geminiJson({ systemInstruction, schema, contents }) {
-  const key = getKey();
-  if (!key) throw new Error("Add your Gemini API key to start.");
-  const res = await fetch(`${API_BASE}/${CONV_MODEL}:generateContent?key=${encodeURIComponent(key)}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemInstruction }] },
-      contents,
-      generationConfig: { responseMimeType: "application/json", responseSchema: schema, temperature: 0.8 },
-    }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error?.message ?? `Request failed (${res.status})`);
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ?? "";
+// The schemas above are in Gemini's format; OpenAI-style APIs want standard JSON Schema.
+function toJsonSchema(s) {
+  const out = { type: s.type.toLowerCase() };
+  if (s.properties) {
+    out.properties = Object.fromEntries(Object.entries(s.properties).map(([k, v]) => [k, toJsonSchema(v)]));
+  }
+  if (s.items) out.items = toJsonSchema(s.items);
+  if (s.required) out.required = s.required;
+  return out;
+}
+
+function parseModelJson(text) {
   try {
     return JSON.parse(text);
   } catch {
     throw new Error("The model returned an unreadable response. Please try again.");
   }
+}
+
+// One request to an OpenAI-compatible chat API (Mistral, Groq). Returns the fetch Response.
+function chatRequest(service, key, { systemInstruction, schema, contents }) {
+  const messages = [
+    {
+      role: "system",
+      content: `${systemInstruction}\n\nAnswer with only a JSON object that matches this JSON Schema:\n${JSON.stringify(toJsonSchema(schema))}`,
+    },
+    ...contents.map((c) => ({
+      role: c.role === "model" ? "assistant" : "user",
+      content: c.parts.map((p) => p.text).join(""),
+    })),
+  ];
+  return fetch(service.url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model: service.model,
+      messages,
+      response_format: { type: "json_object" },
+      temperature: 0.8,
+      ...service.extra,
+    }),
+  });
+}
+
+async function chatJson(request) {
+  const mistralKey = getKey("mistral");
+  const groqKey = getKey("groq");
+  if (!mistralKey) throw new Error("Add your Mistral API key to start.");
+  let service = MISTRAL;
+  let res = await chatRequest(MISTRAL, mistralKey, request);
+  // Mistral's free tier is rate-limited (429) and sometimes overloaded (5xx); Groq takes over.
+  if ((res.status === 429 || res.status >= 500) && groqKey) {
+    service = GROQ;
+    res = await chatRequest(GROQ, groqKey, request);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = data.error?.message ?? data.message ?? data.detail ?? `Request failed (${res.status})`;
+    throw new Error(`${service.name}: ${typeof message === "string" ? message : JSON.stringify(message)}`);
+  }
+  return parseModelJson(data.choices?.[0]?.message?.content ?? "");
+}
+
+function aiJson(request) {
+  return getProvider() === "mistral" ? chatJson(request) : geminiJson(request);
+}
+
+async function geminiJson({ systemInstruction, schema, contents }) {
+  const key = getKey("gemini");
+  if (!key) throw new Error("Add your Gemini API key to start.");
+  const request = (model) =>
+    fetch(`${API_BASE}/${model}:generateContent?key=${encodeURIComponent(key)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        contents,
+        generationConfig: { responseMimeType: "application/json", responseSchema: schema, temperature: 0.8 },
+      }),
+    });
+  let res = await request(CONV_MODEL);
+  // Flash is often overloaded (503) or out of free quota (429); the lighter model usually isn't.
+  if (res.status === 503 || res.status === 429) res = await request(CONV_FALLBACK_MODEL);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error?.message ?? `Request failed (${res.status})`);
+  return parseModelJson(data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ?? "");
 }
 
 function historyToContents(history, userText) {
@@ -374,12 +531,13 @@ function historyToContents(history, userText) {
   return contents;
 }
 
-async function geminiTurn(settings, history, message) {
+async function chatTurn(settings, history, message) {
   const mode = MODES[settings.request.mode] ?? MODES.scene;
   const userText = message.trim() || mode.opener;
-  const targetWords = settings.vocab?.enabled ? nextVocabBatch() : [];
-  const turn = await geminiJson({
-    systemInstruction: turnSystemPrompt(settings.request, targetWords),
+  const learnt = Boolean(settings.vocab?.learnt);
+  const targetWords = settings.vocab?.enabled ? nextVocabBatch(learnt ? 8 : 12) : [];
+  const turn = await aiJson({
+    systemInstruction: turnSystemPrompt(settings.request, targetWords, learnt),
     schema: TURN_SCHEMA,
     contents: historyToContents(history, userText),
   });
@@ -389,8 +547,8 @@ async function geminiTurn(settings, history, message) {
   return { turn, userText };
 }
 
-async function geminiWord({ word, sentence, language, nativeLanguage }) {
-  return geminiJson({
+async function wordInfo({ word, sentence, language, nativeLanguage }) {
+  return aiJson({
     systemInstruction: `You are a concise ${language} dictionary for a ${nativeLanguage} speaker. Write translations in ${nativeLanguage}.`,
     schema: WORD_SCHEMA,
     contents: [{ role: "user", parts: [{ text: `Explain the word "${word}" as it is used in: "${sentence}"` }] }],
@@ -1101,7 +1259,7 @@ function renderFocusWords(words) {
   box.replaceChildren();
   const label = document.createElement("span");
   label.className = "focus-label";
-  label.textContent = "Practising: ";
+  label.textContent = state.settings?.vocab?.learnt ? "Your words: " : "Practising: ";
   box.append(label);
   for (const w of words) {
     const chip = document.createElement("span");
@@ -1271,7 +1429,7 @@ async function sendTurn(message) {
   setStatus(`${state.settings.characterName} is thinking…`);
   const slowHint = setTimeout(() => setStatus("Still thinking… longer replies take a moment."), 6000);
   try {
-    const { turn, userText } = await geminiTurn(state.settings, state.history, message);
+    const { turn, userText } = await chatTurn(state.settings, state.history, message);
     state.history.push({ role: "user", content: message || userText });
     state.history.push({ role: "assistant", content: turn.reply });
 
@@ -1305,7 +1463,7 @@ async function openExplorer(word, sentence) {
   panel.hidden = false;
   body.textContent = `Looking up “${word}”…`;
   try {
-    const info = await geminiWord({
+    const info = await wordInfo({
       word,
       sentence,
       language: state.settings.request.language,
@@ -1370,30 +1528,58 @@ function renderBookmarks() {
 
 // ---------- wiring ----------
 
-// Show the key box or the setup, depending on whether a key is already saved.
+const KEY_INPUTS = { mistral: "mistral-key", groq: "groq-key", gemini: "api-key" };
+
+// Show only the key fields the chosen AI needs; saved keys show as a placeholder.
+function showKeyFields() {
+  const provider = $("provider").value;
+  for (const el of document.querySelectorAll("#keygate [data-provider]")) {
+    el.hidden = el.dataset.provider !== provider;
+  }
+  $("gemini-optional").hidden = provider === "gemini";
+  for (const [service, id] of Object.entries(KEY_INPUTS)) {
+    $(id).placeholder = getKey(service) ? "Saved — leave blank to keep" : $(id).dataset.placeholder;
+  }
+}
+for (const id of Object.values(KEY_INPUTS)) $(id).dataset.placeholder = $(id).placeholder;
+$("provider").addEventListener("change", showKeyFields);
+
+function keySummary() {
+  if (getProvider() === "gemini") return "✓ Using Google Gemini.";
+  return getKey("groq") ? "✓ Using Mistral, with Groq as backup." : "✓ Using Mistral.";
+}
+
+// Show the key box or the setup, depending on whether the chosen AI has a key saved.
 function refreshKeyGate() {
-  const haveKey = Boolean(getKey());
+  const haveKey = Boolean(getKey(getProvider()));
   $("keygate").hidden = haveKey;
   $("setup").hidden = !haveKey;
-  if (haveKey) $("key-saved").hidden = false;
+  $("key-saved").hidden = !haveKey;
+  $("key-summary").textContent = keySummary();
+  $("provider").value = getProvider();
+  showKeyFields();
 }
 
 $("save-key").addEventListener("click", () => {
-  const value = $("api-key").value.trim();
-  if (!value) {
-    $("key-status").textContent = "Paste your Gemini API key first.";
+  const provider = $("provider").value;
+  const typed = Object.fromEntries(Object.entries(KEY_INPUTS).map(([service, id]) => [service, $(id).value.trim()]));
+  if (!typed[provider] && !getKey(provider)) {
+    $("key-status").textContent = `Paste your ${provider === "mistral" ? "Mistral" : "Gemini"} API key first.`;
     return;
   }
-  setKey(value);
-  $("api-key").value = "";
+  for (const [service, value] of Object.entries(typed)) {
+    if (value) setKey(service, value);
+    $(KEY_INPUTS[service]).value = "";
+  }
+  setProvider(provider);
   $("key-status").textContent = "";
   refreshKeyGate();
 });
 
 $("change-key").addEventListener("click", () => {
-  setKey("");
-  $("key-saved").hidden = true;
-  refreshKeyGate();
+  $("keygate").hidden = false;
+  $("setup").hidden = true;
+  showKeyFields();
 });
 
 $("start").addEventListener("click", async () => {
@@ -1406,8 +1592,10 @@ $("start").addEventListener("click", async () => {
 
   let vocab = { enabled: false };
   if (useVocab) {
-    const loaded = await loadVocabForSession(levels.length ? levels : ["A1", "A2", "B1"]);
-    vocab = { enabled: loaded > 0, levels };
+    // Linked to the trainer: A1/A2 in full plus its learnt B1 words (fetched on page load, so Start never waits).
+    const learnt = trainerLink() ? ((await idbGet("learnt_words").catch(() => null)) ?? []) : null;
+    const loaded = await loadVocabForSession(levels.length ? levels : ["A1", "A2", "B1"], learnt);
+    vocab = { enabled: loaded > 0, levels, learnt: Boolean(learnt) };
   }
 
   state.settings = {
@@ -1463,6 +1651,42 @@ async function loadVocabUrl(url, { silent } = {}) {
 }
 
 $("load-url").addEventListener("click", () => loadVocabUrl($("vocab-url").value.trim()));
+
+// Fetch the learnt words now and keep them, so they are ready when a conversation starts.
+async function refreshLearntWords() {
+  if (!trainerLink()) return renderTrainerLink(null);
+  $("trainer-status").textContent = "🔗 Linked to your Vocab Trainer · fetching your learnt words…";
+  try {
+    const words = await fetchLearntWords();
+    await idbSet("learnt_words", words);
+    renderTrainerLink(higherCount(words));
+  } catch (error) {
+    const kept = trainerLink() ? higherCount((await idbGet("learnt_words").catch(() => null)) ?? []) : null;
+    renderTrainerLink(kept, error.message);
+  }
+}
+
+function higherCount(words) {
+  return words.filter((w) => !KNOWN_LEVELS.includes(w.level)).length;
+}
+
+// count: learnt B1 words ready (null when not linked).
+function renderTrainerLink(count, problem = "") {
+  const linked = Boolean(trainerLink());
+  $("trainer-unlink").hidden = !linked;
+  const text = !linked
+    ? "Want B1 to use only the words you have learnt? In the Vocab Trainer, tap your initial → 🗣 practise in Talkloop."
+    : `🔗 Linked to your Vocab Trainer · your partner uses all A1 and A2 words plus ${
+        count ? `the ${count} B1 words you have learnt there` : "your learnt B1 words (none yet)"}.`;
+  $("trainer-status").textContent = problem ? `${problem} ${linked ? text : ""}`.trim() : text;
+}
+
+$("trainer-unlink").addEventListener("click", async () => {
+  store.set("trainer_link", null);
+  await idbSet("learnt_words", []).catch(() => {});
+  renderTrainerLink(null);
+  refreshVocabUI((await vocabMeta().catch(() => ({ count: 0 }))).count);
+});
 
 function refreshVocabUI(count) {
   const useVocab = $("use-vocab");
@@ -1544,9 +1768,12 @@ renderBookmarks();
 // Get the voice ready while the learner picks their settings, so the first reply doesn't wait.
 preloadSelectedVoice();
 // Show any already-imported vocab; if none, fetch the default URL in the background.
+// Then the learnt words from the Vocab Trainer, if linked (or just linked via the URL).
+takeTrainerLinkFromUrl();
 vocabMeta()
   .then((m) => {
     refreshVocabUI(m.count);
     if (m.count === 0) loadVocabUrl(DEFAULT_VOCAB_URL, { silent: true });
   })
-  .catch(() => {});
+  .catch(() => {})
+  .finally(refreshLearntWords);

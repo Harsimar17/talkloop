@@ -19,24 +19,41 @@
     </header>
 
     <section id="keygate" class="card" hidden>
-      <h2>Add your Gemini API key</h2>
+      <h2>Connect an AI</h2>
       <p class="muted">
-        Talkloop runs entirely in your browser and talks to Google Gemini with your own key.
-        Get a free key at
-        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
-        Your key is stored only in this browser — it is never sent anywhere except Google.
+        Talkloop runs entirely in your browser and talks to the AI you pick with your own free key.
+        Keys are stored only in this browser and are sent only to that service.
       </p>
-      <label>Gemini API key
-        <input id="api-key" type="password" autocomplete="off" placeholder="Paste your key (AIza… or AQ.…)" />
+      <label>Conversation AI
+        <select id="provider">
+          <option value="mistral">Mistral — best German</option>
+          <option value="gemini">Google Gemini</option>
+        </select>
       </label>
-      <button id="save-key" class="primary">Save key</button>
+      <label data-provider="mistral">Mistral API key
+        <input id="mistral-key" type="password" autocomplete="off" placeholder="Paste your Mistral key" />
+        <span class="muted">Free at
+          <a href="https://console.mistral.ai/api-keys" target="_blank" rel="noopener">console.mistral.ai</a>
+          (pick the free Experiment plan).</span>
+      </label>
+      <label data-provider="mistral">Groq API key <span class="muted">(optional — used when Mistral is busy)</span>
+        <input id="groq-key" type="password" autocomplete="off" placeholder="Paste your Groq key (gsk_…)" />
+        <span class="muted">Free at
+          <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com</a>.</span>
+      </label>
+      <label>Gemini API key <span id="gemini-optional" class="muted">(optional — backup voice)</span>
+        <input id="api-key" type="password" autocomplete="off" placeholder="Paste your key (AIza… or AQ.…)" />
+        <span class="muted">Free at
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</span>
+      </label>
+      <button id="save-key" class="primary">Save</button>
       <p id="key-status" class="status"></p>
     </section>
 
     <section id="setup" class="card" hidden>
       <div id="key-saved" class="keyline" hidden>
-        <span class="muted">✓ Gemini key saved in this browser.</span>
-        <button id="change-key" type="button">Change key</button>
+        <span id="key-summary" class="muted"></span>
+        <button id="change-key" type="button">Change</button>
       </div>
       <h2>Start a conversation</h2>
       <div class="grid">
@@ -104,6 +121,10 @@
           <label class="file-btn">Import file
             <input id="vocab-file" type="file" accept="application/json,.json" hidden />
           </label>
+        </div>
+        <div class="trainer-link">
+          <p id="trainer-status" class="muted" aria-live="polite"></p>
+          <button type="button" id="trainer-unlink" hidden>Unlink</button>
         </div>
         <div class="vocab-url-row">
           <input id="vocab-url" type="url"
