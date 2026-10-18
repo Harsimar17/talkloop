@@ -418,23 +418,29 @@ function nextVocabBatch(n = 12) {
   return batch;
 }
 
+// The model writes these fields in this order, so coach comes first: it judges the
+// learner's message before writing its own reply and suggestions, whose words it would
+// otherwise credit to the learner. (Gemini needs propertyOrdering for that; the JSON
+// Schema sent to Mistral keeps the order of properties.)
 const TURN_SCHEMA = {
   type: "OBJECT",
   properties: {
-    reply: { type: "STRING" },
-    reply_translation: { type: "STRING" },
-    suggestions: { type: "ARRAY", items: { type: "STRING" } },
     coach: {
       type: "OBJECT",
       properties: { understood: { type: "BOOLEAN" }, correction: { type: "STRING" }, tip: { type: "STRING" } },
       required: ["understood", "correction", "tip"],
+      propertyOrdering: ["understood", "correction", "tip"],
     },
+    reply: { type: "STRING" },
+    reply_translation: { type: "STRING" },
+    suggestions: { type: "ARRAY", items: { type: "STRING" } },
     rapport_delta: { type: "INTEGER" },
     conversation_finished: { type: "BOOLEAN" },
     // How the reply is spoken (the open-source German voice has a recording per mood).
     mood: { type: "STRING", enum: MOODS },
   },
-  required: ["reply", "reply_translation", "suggestions", "coach", "rapport_delta", "conversation_finished", "mood"],
+  required: ["coach", "reply", "reply_translation", "suggestions", "rapport_delta", "conversation_finished", "mood"],
+  propertyOrdering: ["coach", "reply", "reply_translation", "suggestions", "rapport_delta", "conversation_finished", "mood"],
 };
 
 const WORD_SCHEMA = {
@@ -455,7 +461,7 @@ function personaFor({ scenario, mode }) {
   return m.usesScene ? SCENARIOS[scenario] ?? SCENARIOS.cafe : PARTNER;
 }
 
-function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, tense }, targetWords = [], learnt = false) {
+function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, tense }, targetWords = [], learnt = false, learnerMessage = "") {
   const m = MODES[mode] ?? MODES.scene;
   const persona = personaFor({ scenario, mode });
   const lines = [
@@ -466,7 +472,9 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, ten
     ...(m.usesScene && persona.goal ? [`Scene goal: ${persona.goal}`] : []),
     "Speech recognition produced the learner's message, so ignore missing punctuation and obvious transcription slips.",
     `Write reply_translation, coach.tip and nothing else in ${nativeLanguage}.`,
-    "coach is feedback on the learner's last message only. Give a correction only when that message has a real grammar or word-choice mistake. coach.tip may praise or explain something the learner actually wrote; never bring up words, grammar or topics that are not in their message (such as practice words they did not use). If there is nothing useful to say, leave coach.tip empty.",
+    learnerMessage
+      ? `Fill coach first, before writing your reply. It judges only the learner's last message, which is exactly: ${JSON.stringify(learnerMessage)}. Give a correction only when that text has a real grammar or word-choice mistake. coach.tip may praise or explain something that literally appears in that text; never credit the learner with words, tenses or grammar that are not in it, such as those in your own replies, your suggestions or practice words they did not use. If there is nothing useful to say, leave coach.tip empty.`
+      : "There is no learner message to judge yet: leave coach.correction and coach.tip empty.",
     "Your reply is read aloud, so let your feelings show in the words: react like a real person with short interjections (for example Oh!, Ach wirklich?, Super!, Oh nein!) and use ! and ? where you mean them.",
     `Set mood to how the reply should sound: ${MOODS.join(", ")}. Use amused for fun or happy replies, surprised for amazement, angry only when the role calls for annoyance, sleepy for tiredness, whisper for secrets, and neutral otherwise.`,
   ];
@@ -475,7 +483,7 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, ten
     lines.push(
       `The learner wants to practise ${t.form}. Use this tense yourself wherever it fits, and keep steering the conversation so that the natural answer to your question needs it: ask about ${t.ask}. Your very first question, right after the greeting, should already need this tense. Stay in your role while doing so.`,
       "Write the suggestions in this tense.",
-      "Check every learner message for this tense. If they used another tense where it was expected, or formed it wrongly (wrong auxiliary, wrong participle or ending), put the whole sentence corrected into this tense in coach.correction, even if it is otherwise understandable. When they use it correctly, say so briefly in coach.tip.",
+      "Check every learner message for this tense. If they used another tense where it was expected, or formed it wrongly (wrong auxiliary, wrong participle or ending), put the whole sentence corrected into this tense in coach.correction, even if it is otherwise understandable. When their message does use it correctly, say so briefly in coach.tip.",
     );
   }
   if (targetWords.length && learnt) {
@@ -598,7 +606,7 @@ async function chatTurn(settings, history, message) {
   const learnt = Boolean(settings.vocab?.learnt);
   const targetWords = settings.vocab?.enabled ? nextVocabBatch(learnt ? 8 : 12) : [];
   const turn = await aiJson({
-    systemInstruction: turnSystemPrompt(settings.request, targetWords, learnt),
+    systemInstruction: turnSystemPrompt(settings.request, targetWords, learnt, message.trim()),
     schema: TURN_SCHEMA,
     contents: historyToContents(history, userText),
   });
