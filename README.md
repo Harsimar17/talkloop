@@ -58,7 +58,8 @@ Every visitor enters their own keys, so you never ship a key and there's no serv
 
 - Conversation (Mistral): `mistral-small-latest`, falling back to Groq's `openai/gpt-oss-120b`
   when Mistral is rate-limited or busy
-- Conversation (Gemini): `gemini-flash-latest`, falling back to `gemini-flash-lite-latest`
+- Conversation (Gemini): `gemini-flash-lite-latest` (replies in about a second), falling back to
+  `gemini-flash-latest`
 - Speech (default): [Piper](https://github.com/rhasspy/piper), an open-source voice that runs on
   the device (`piper.js`). The voice (German: "Thorsten", ~63 MB plus ~18 MB of pronunciation
   data) downloads when you start your first conversation and is then stored in the browser.

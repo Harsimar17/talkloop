@@ -58,8 +58,9 @@ function renderStats() {
 // ---------- AI services (called directly from the browser with the user's own keys) ----------
 // Conversation runs on Mistral (best German of the free tiers, with Groq as a backup when
 // Mistral is busy) or on Gemini. Gemini is also the backup voice when Piper can't speak.
-const CONV_MODEL = "gemini-flash-latest";
-const CONV_FALLBACK_MODEL = "gemini-flash-lite-latest";
+// Lite answers in about a second; Flash takes about five, so it is only the fallback.
+const CONV_MODEL = "gemini-flash-lite-latest";
+const CONV_FALLBACK_MODEL = "gemini-flash-latest";
 const TTS_MODEL = "gemini-3.8-flash-tts";
 const TTS_VOICE = "Kore";
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -536,7 +537,7 @@ async function geminiJson({ systemInstruction, schema, contents }) {
       }),
     });
   let res = await request(CONV_MODEL);
-  // Flash is often overloaded (503) or out of free quota (429); the lighter model usually isn't.
+  // When one model is overloaded (503) or out of free quota (429), the other usually isn't.
   if (res.status === 503 || res.status === 429) res = await request(CONV_FALLBACK_MODEL);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error?.message ?? `Request failed (${res.status})`);
