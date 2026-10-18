@@ -1824,6 +1824,13 @@ $("text").addEventListener("focus", () => {
 });
 $("text").addEventListener("blur", () => document.body.classList.remove("typing"));
 
+// Tapping Send must not blur the text box first. On phones, blurring dismisses the
+// keyboard and reflows the dock mid-tap, so the first tap is swallowed closing the
+// keyboard and you'd have to press Send twice. Preventing the button's mousedown
+// default keeps focus on the input, so the first tap submits (the input blurs a moment
+// later when it's disabled while the reply loads).
+$("composer").querySelector("button[type='submit']").addEventListener("mousedown", (event) => event.preventDefault());
+
 $("mic").addEventListener("click", () => {
   if (state.handsFree || $("mic").getAttribute("aria-pressed") === "true") {
     stopListening();
