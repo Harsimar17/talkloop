@@ -1111,19 +1111,54 @@ async function playCloudAudio(pcm, sampleRate, wordSpans, onDone, onFail) {
   currentSource = src;
   const startedAt = ctx.currentTime;
   currentHighlight = startHighlight(wordSpans, () => ctx.currentTime - startedAt, buffer.duration);
-  src.onended = () => { currentSource = null; clear(); onDone(); };
+  let settled = false;
+  let stallTimer = null;
+  let deadline = null;
+  const end = () => {
+    if (settled) return false;
+    settled = true;
+    clearTimeout(stallTimer);
+    clearTimeout(deadline);
+    src.onended = null;
+    currentSource = null;
+    clear();
+    return true;
+  };
+  src.onended = () => { if (end()) onDone(); };
   try {
     src.start();
   } catch (error) {
-    currentSource = null;
-    clear();
-    onFail(error.message);
+    if (end()) onFail(error.message);
+    return;
   }
+  // iOS can report the context as running while its clock is frozen (after the mic or
+  // another app took the audio session): nothing is heard, onended never comes, and the
+  // call would sit on "Speaking…" for good. If the clock hasn't moved, drop the context
+  // (the next tap unlocks a fresh one) and play through the <audio> element instead.
+  stallTimer = setTimeout(() => {
+    if (token !== speakToken || ctx.currentTime - startedAt > 0.1 || !end()) return;
+    try { src.stop(); } catch { /* never started */ }
+    discardAudioCtx();
+    playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail);
+  }, 1500);
+  // And never wait long past the end for an onended that doesn't come.
+  deadline = setTimeout(() => {
+    if (token !== speakToken || !end()) return;
+    try { src.stop(); } catch { /* already stopped */ }
+    onDone();
+  }, (buffer.duration + 2) * 1000);
+}
+
+// Forget a context that stopped working; getAudioCtx makes a new one, which the next tap unlocks.
+function discardAudioCtx() {
+  try { audioCtx?.close().catch(() => {}); } catch { /* already closed */ }
+  audioCtx = null;
 }
 
 // Plays through the shared <audio> element, for browsers without Web Audio or
 // when the AudioContext is suspended.
 function playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail) {
+  const token = speakToken;
   const url = pcmToWavUrl(pcm, sampleRate);
   const audio = player;
   audio.src = url;
@@ -1133,13 +1168,35 @@ function playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail) {
     const i = Math.min(wordSpans.length - 1, Math.floor((audio.currentTime / audio.duration) * wordSpans.length));
     wordSpans.forEach((span, idx) => span.classList.toggle("speaking", idx === i));
   };
-  const clear = () => {
+  let settled = false;
+  let stallTimer = null;
+  let deadline = null;
+  const end = (ok, reason) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(stallTimer);
+    clearTimeout(deadline);
+    audio.onended = audio.onerror = audio.ontimeupdate = null;
     wordSpans.forEach((span) => span.classList.remove("speaking"));
     URL.revokeObjectURL(url);
+    if (ok) onDone();
+    else onFail(reason);
   };
-  audio.onended = () => { clear(); onDone(); };
-  audio.onerror = () => { clear(); onFail("audio could not be played"); };
-  audio.play().catch((error) => { clear(); onFail(error.message); });
+  audio.onended = () => end(true);
+  audio.onerror = () => end(false, "audio could not be played");
+  audio.play().catch((error) => end(false, error.message));
+  // Same guards as the Web Audio path: playback that never gets going, or never reports
+  // its end, must not leave the call stuck on "Speaking…".
+  stallTimer = setTimeout(() => {
+    if (token !== speakToken || audio.currentTime > 0.1) return;
+    audio.pause();
+    end(false, "the audio didn't start");
+  }, 2000);
+  deadline = setTimeout(() => {
+    if (token !== speakToken) return;
+    audio.pause();
+    end(true);
+  }, (pcm.byteLength / 2 / sampleRate + 3) * 1000);
 }
 
 async function browserSpeak(text, rate, wordSpans, onDone) {
@@ -1163,13 +1220,35 @@ async function browserSpeak(text, rate, wordSpans, onDone) {
       event.charIndex >= Number(span.dataset.start) && event.charIndex < Number(span.dataset.end),
     ));
   };
+  let started = false;
+  let settled = false;
+  let startTimer = null;
+  let deadline = null;
   const clear = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(startTimer);
+    clearTimeout(deadline);
     wordSpans.forEach((span) => span.classList.remove("speaking"));
     if (typeof onDone === "function") onDone();
   };
+  utterance.onstart = () => { started = true; };
   utterance.onend = clear;
   utterance.onerror = clear;
   speechSynthesis.speak(utterance);
+  // iOS's speech engine sometimes never starts, or never reports the end: this is the
+  // last voice to try, so say so and let the call carry on instead of hanging.
+  startTimer = setTimeout(() => {
+    if (started || token !== speakToken) return;
+    speechSynthesis.cancel();
+    noteVoice(wordSpans, "The voice didn't play. Tap ▶ Replay to hear it.");
+    clear();
+  }, 4000);
+  deadline = setTimeout(() => {
+    if (token !== speakToken) return;
+    speechSynthesis.cancel();
+    clear();
+  }, ((text.length * 0.12) / rate + 5) * 1000);
 }
 
 function stopSpeaking() {
