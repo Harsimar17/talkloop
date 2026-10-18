@@ -1293,6 +1293,14 @@ function renderCoach(coach) {
   }
 }
 
+// Put a suggestion into the text box, ready to edit or send, keeping the caret at the end.
+function useSuggestion(text) {
+  const input = $("text");
+  input.value = text;
+  input.focus();
+  try { input.setSelectionRange(text.length, text.length); } catch { /* unsupported */ }
+}
+
 function renderSuggestions(suggestions) {
   const box = $("suggestions");
   box.replaceChildren();
@@ -1300,10 +1308,15 @@ function renderSuggestions(suggestions) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.textContent = text;
-    chip.addEventListener("click", () => {
-      $("text").value = text;
-      $("text").focus();
+    // Like Send: a tap on a chip must not blur the text box, or the keyboard drops and
+    // the dock collapses before the text lands. Handle the tap on touchend and prevent
+    // its default (keeps focus / keyboard, cancels the duplicate click); desktop uses click.
+    chip.addEventListener("mousedown", (event) => event.preventDefault());
+    chip.addEventListener("touchend", (event) => {
+      event.preventDefault();
+      useSuggestion(text);
     });
+    chip.addEventListener("click", () => useSuggestion(text));
     box.append(chip);
   }
 }
