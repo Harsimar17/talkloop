@@ -819,44 +819,42 @@ function startListening() {
     setStatus("Voice input needs Chrome or Edge. You can still type.");
     return;
   }
-  if (recognizer) return; // one listening session at a time
   stopSpeaking();
-  // This session's recognizer: its handlers and pause timer use it, never the shared variable,
-  // so a session that ends late can't stop or unhook a newer one.
-  const rec = new Recognition();
-  recognizer = rec;
-  rec.lang = state.settings.locale;
-  rec.interimResults = true;
+  recognizer = new Recognition();
+  recognizer.lang = state.settings.locale;
+  recognizer.interimResults = true;
   // Keep listening through pauses; a longer silence ends the turn.
-  rec.continuous = true;
+  recognizer.continuous = true;
 
-  // Everything heard so far, rebuilt from all the results each time. Browsers differ in when,
-  // or whether, they mark results final mid-session (Safari on iPhone often keeps them interim
-  // until the session ends), so interim text counts too: nothing heard is lost if the session
-  // ends early, and a result sent again isn't counted twice.
-  let heard = "";
+  let finalText = "";
   let silenceTimer = null;
-  rec.onresult = (event) => {
-    heard = Array.from(event.results, (result) => result[0].transcript).join(" ").replace(/\s+/g, " ").trim();
-    $("live").textContent = heard;
-    if (!heard) return;
-    // Any speech, final or not, restarts the pause timer: after a pause the turn ends and is
-    // sent hands-free. You get time to think.
+  const armSilence = () => {
     clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(() => rec.stop(), SILENCE_MS);
+    // Auto-stop after a pause so the turn sends hands-free. You get time to think.
+    silenceTimer = setTimeout(() => recognizer?.stop(), SILENCE_MS);
   };
-  rec.onerror = (event) => {
+
+  recognizer.onresult = (event) => {
+    let interim = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      if (result.isFinal) finalText += result[0].transcript + " ";
+      else interim += result[0].transcript;
+    }
+    $("live").textContent = (finalText + interim).trim();
+    if (finalText.trim()) armSilence();
+  };
+  recognizer.onerror = (event) => {
     if (event.error === "no-speech") setStatus("I'm listening… take your time.");
     else if (event.error === "not-allowed") { state.handsFree = false; setStatus("Microphone permission was denied."); }
     else if (event.error !== "aborted") setStatus(`Speech recognition error: ${event.error}`);
   };
-  rec.onend = () => {
+  recognizer.onend = () => {
     clearTimeout(silenceTimer);
-    if (recognizer !== rec) return;
     recognizer = null;
     setMic(false);
     $("live").textContent = "";
-    const spoken = heard;
+    const spoken = finalText.trim();
     if (dropNextResult) {
       dropNextResult = false; // cut short on purpose (e.g. "Hear it" or Skip in a drill)
     } else if (state.paused) {
@@ -867,10 +865,6 @@ function startListening() {
       // Saying the corrected sentence: check it; hands-free listens again after a miss.
       if (isSkipCommand(spoken)) endDrill();
       else if (!checkDrill(spoken)) maybeResumeListening();
-    } else if (spoken && state.busy) {
-      // The reply to the last turn is still on its way: keep what was said instead of losing it.
-      $("text").value = spoken;
-      setStatus("Still answering — your words are in the box. Send them when you're ready.");
     } else if (spoken) {
       // Hands-free: send straight away. Listening resumes after the reply is spoken.
       sendTurn(spoken);
@@ -881,16 +875,7 @@ function startListening() {
       setStatus("");
     }
   };
-  try {
-    rec.start();
-  } catch (error) {
-    // The browser refused to start (e.g. the microphone is still busy): say so, don't pretend to listen.
-    recognizer = null;
-    state.handsFree = false;
-    setMic(false);
-    setStatus(`The microphone didn't start (${error.message}). Tap Talk to try again.`);
-    return;
-  }
+  recognizer.start();
   setMic(true);
   setStatus("Listening… just talk. Tap the mic to stop hands-free.");
 }
@@ -2046,7 +2031,6 @@ function renderTrainerLink(count, problem = "") {
     : `🔗 Linked to your Vocab Trainer · your partner uses all A1 and A2 words plus ${
         count ? `the ${count} B1 words you have learnt there` : "your learnt B1 words (none yet)"}.`;
   $("trainer-status").textContent = problem ? `${problem} ${linked ? text : ""}`.trim() : text;
-  $("vocab-summary").textContent = linked ? "🔗 Linked" : "Not linked";
 }
 
 $("trainer-form").addEventListener("submit", async (event) => {
@@ -2086,70 +2070,11 @@ function refreshVocabUI(count) {
   }
 }
 
-// The scene only matters in scene role-play; show it only then.
+// The scene only matters in scene role-play; grey it out otherwise.
 $("mode").addEventListener("change", () => {
   const usesScene = (MODES[$("mode").value] ?? MODES.scene).usesScene;
   $("scenario").disabled = !usesScene;
-  $("scenario").closest("label").hidden = !usesScene;
-});
-
-// Tappable cards for a <select>, which stays the source of truth (it is what the rest of the
-// code reads): picking a card sets the select and fires its change event. An option's text
-// "Free chat — partner leads" becomes a title and a subtitle.
-function pickerFor(select, className, icons = {}) {
-  const box = document.createElement("div");
-  box.className = `picker ${className}`;
-  box.setAttribute("role", "radiogroup");
-  box.setAttribute("aria-label", select.getAttribute("aria-label") ?? "");
-  const cards = [...select.options].map((option) => {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.setAttribute("role", "radio");
-    const [title, sub] = option.textContent.split(" — ");
-    for (const [cls, text] of [["pick-icon", icons[option.value]], ["pick-title", title], ["pick-sub", sub]]) {
-      if (!text) continue;
-      const span = document.createElement("span");
-      span.className = cls;
-      span.textContent = text;
-      card.append(span);
-    }
-    card.addEventListener("click", () => {
-      select.value = option.value;
-      select.dispatchEvent(new Event("change"));
-    });
-    return card;
-  });
-  const sync = () => cards.forEach((card, i) => card.setAttribute("aria-checked", String(select.selectedIndex === i)));
-  select.addEventListener("change", sync);
-  sync();
-  box.append(...cards);
-  select.after(box);
-  select.hidden = true;
-}
-pickerFor($("level"), "picker-level");
-pickerFor($("mode"), "picker-mode", { lead: "💬", interview: "🙋", topic: "💡", scene: "🎭" });
-
-// Theme: follows the device unless light or dark is picked here (remembered per device; the
-// script in <head> applies it before the first paint).
-const THEMES = { auto: ["🌗", "Theme: same as your device"], light: ["☀️", "Theme: light"], dark: ["🌙", "Theme: dark"] };
-let theme = THEMES[store.get("theme", "auto")] ? store.get("theme", "auto") : "auto";
-function applyTheme() {
-  if (theme === "auto") delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = theme;
-  $("theme").textContent = THEMES[theme][0];
-  $("theme").title = THEMES[theme][1];
-  $("theme").setAttribute("aria-label", `${THEMES[theme][1]} (tap to change)`);
-}
-applyTheme();
-$("theme").addEventListener("click", () => {
-  theme = { auto: "light", light: "dark", dark: "auto" }[theme];
-  store.set("theme", theme);
-  applyTheme();
-});
-
-// Laptop: Esc closes the word explorer.
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !$("explorer").hidden) $("explorer").hidden = true;
+  $("scenario").closest("label").style.opacity = usesScene ? "1" : "0.5";
 });
 
 $("language").addEventListener("change", preloadSelectedVoice);
@@ -2283,8 +2208,6 @@ preloadSelectedVoice();
 // Show any already-imported vocab; if none, fetch the default URL in the background.
 // Then the learnt words from the Vocab Trainer, if linked (or just linked via the URL).
 takeTrainerLinkFromUrl();
-// Setting up vocabulary is once per device: keep it open until the Vocab Trainer is linked.
-$("vocab-details").open = !trainerLink();
 vocabMeta()
   .then((m) => {
     refreshVocabUI(m.count);
