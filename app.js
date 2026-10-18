@@ -466,7 +466,7 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, ten
     ...(m.usesScene && persona.goal ? [`Scene goal: ${persona.goal}`] : []),
     "Speech recognition produced the learner's message, so ignore missing punctuation and obvious transcription slips.",
     `Write reply_translation, coach.tip and nothing else in ${nativeLanguage}.`,
-    "Give a correction only when the learner made a real grammar or word-choice mistake.",
+    "coach is feedback on the learner's last message only. Give a correction only when that message has a real grammar or word-choice mistake. coach.tip may praise or explain something the learner actually wrote; never bring up words, grammar or topics that are not in their message (such as practice words they did not use). If there is nothing useful to say, leave coach.tip empty.",
     "Your reply is read aloud, so let your feelings show in the words: react like a real person with short interjections (for example Oh!, Ach wirklich?, Super!, Oh nein!) and use ! and ? where you mean them.",
     `Set mood to how the reply should sound: ${MOODS.join(", ")}. Use amused for fun or happy replies, surprised for amazement, angry only when the role calls for annoyance, sleepy for tiredness, whisper for secrets, and neutral otherwise.`,
   ];
@@ -483,7 +483,7 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, ten
     lines.push(
       `The learner already knows these words but now needs to practise using them when speaking: ${list}.`,
       "Otherwise speak as you normally would: you are not limited to these words. Use one or two of them naturally in your reply, and steer the conversation so the learner gets to use them too, for example with a question whose natural answer needs one of them. Never list or quiz the words.",
-      "When the learner uses one of these words, check it: if it is right, say so briefly in coach.tip; if the meaning, article or form is wrong, give the fix in coach.correction.",
+      "Only when the learner's message actually contains one of these words, check it: if it is right, say so briefly in coach.tip; if the meaning, article or form is wrong, give the fix in coach.correction.",
     );
   } else if (targetWords.length) {
     const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
