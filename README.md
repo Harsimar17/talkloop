@@ -29,9 +29,10 @@ Typing works in any browser.
 - **Coach** corrections and tips each turn, **suggestions**, per-message **translation**.
 - **Word explorer**: tap any word for meaning, pronunciation and an example; save it.
 - **Streaks** and a per-scene rapport score (stored per browser).
-- **Your learnt words**: in the [Deutsch Vocab Trainer](https://deutsch-vocab-trainer-v2-1.onrender.com/), tap
-  your initial → **practise in Talkloop**. Talkloop then gets a read-only link to the words you have learnt
-  there. Your partner works every A1 and A2 word into the conversation, but for B1 only the words you have
+- **Your learnt words**: under "My vocabulary", connect the
+  [Deutsch Vocab Trainer](https://deutsch-vocab-trainer-v2-1.onrender.com/) with its email and password (or in
+  the trainer, tap your initial → **practise in Talkloop**). Talkloop logs in once, keeps only a read-only link
+  to the words you have learnt there (valid 180 days) and never stores the password. Your partner works every A1 and A2 word into the conversation, but for B1 only the words you have
   learnt (shakiest first), so you practise using them; the coach checks how you used them. Without the link,
   the whole vocabulary list is used.
 

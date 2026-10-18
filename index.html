@@ -126,6 +126,11 @@
           <p id="trainer-status" class="muted" aria-live="polite"></p>
           <button type="button" id="trainer-unlink" hidden>Unlink</button>
         </div>
+        <form id="trainer-form" class="trainer-form" hidden>
+          <input id="trainer-email" type="email" autocomplete="username" placeholder="Vocab Trainer email" required />
+          <input id="trainer-password" type="password" autocomplete="current-password" placeholder="Password" required />
+          <button type="submit" id="trainer-connect">Connect</button>
+        </form>
         <div class="vocab-url-row">
           <input id="vocab-url" type="url"
                  value="https://harsimar17.github.io/Deutsch-Vocab-Helper/german_vocab.json"

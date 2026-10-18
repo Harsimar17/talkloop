@@ -307,13 +307,34 @@ function trainerLink() {
   return store.get("trainer_link", null);
 }
 
+// The deployed Vocab Trainer backend; "trainer_api" in localStorage overrides it (e.g. a local one).
+const TRAINER_API = "https://deutsch-vocab-trainer-v2-1.onrender.com";
+
+// Log in to the trainer once and swap the session for the same read-only link the
+// trainer's button hands out. The password is sent only to the trainer and not kept.
+async function connectTrainer(email, password) {
+  const api = store.get("trainer_api", TRAINER_API).replace(/\/+$/, "");
+  const message = async (res) => (await res.json().catch(() => ({}))).message || `Vocab Trainer answered ${res.status}`;
+  const login = await fetch(`${api}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (login.status === 401) throw new Error("Wrong email or password.");
+  if (!login.ok) throw new Error(await message(login));
+  const { token: session } = await login.json();
+  const res = await fetch(`${api}/api/talkloop/link`, { method: "POST", headers: { Authorization: `Bearer ${session}` } });
+  if (!res.ok) throw new Error(await message(res));
+  store.set("trainer_link", { token: (await res.json()).token, api });
+}
+
 // Learnt words, the least secure first (the trainer sorts them).
 async function fetchLearntWords() {
   const link = trainerLink();
   const res = await fetch(`${link.api}/api/talkloop/words`, { headers: { Authorization: `Bearer ${link.token}` } });
   if (res.status === 401) {
     store.set("trainer_link", null);
-    throw new Error("The link to the Vocab Trainer has expired. Link it again from the trainer.");
+    throw new Error("The link to the Vocab Trainer has expired. Connect again.");
   }
   if (!res.ok) throw new Error(`Vocab Trainer answered ${res.status}`);
   const { words } = await res.json();
@@ -1674,12 +1695,31 @@ function higherCount(words) {
 function renderTrainerLink(count, problem = "") {
   const linked = Boolean(trainerLink());
   $("trainer-unlink").hidden = !linked;
+  $("trainer-form").hidden = linked;
   const text = !linked
-    ? "Want B1 to use only the words you have learnt? In the Vocab Trainer, tap your initial → 🗣 practise in Talkloop."
+    ? "Connect your Vocab Trainer so B1 uses only the words you have learnt there:"
     : `🔗 Linked to your Vocab Trainer · your partner uses all A1 and A2 words plus ${
         count ? `the ${count} B1 words you have learnt there` : "your learnt B1 words (none yet)"}.`;
   $("trainer-status").textContent = problem ? `${problem} ${linked ? text : ""}`.trim() : text;
 }
+
+$("trainer-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const email = $("trainer-email").value.trim();
+  const password = $("trainer-password").value;
+  $("trainer-connect").disabled = true;
+  // The free server sleeps when unused and can take a minute to wake up.
+  $("trainer-status").textContent = "Connecting… (the Vocab Trainer can take up to a minute to wake up)";
+  try {
+    await connectTrainer(email, password);
+    $("trainer-password").value = "";
+    await refreshLearntWords();
+  } catch (error) {
+    renderTrainerLink(null, error.message === "Failed to fetch" ? "Couldn't reach the Vocab Trainer." : error.message);
+  } finally {
+    $("trainer-connect").disabled = false;
+  }
+});
 
 $("trainer-unlink").addEventListener("click", async () => {
   store.set("trainer_link", null);
