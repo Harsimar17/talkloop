@@ -1270,6 +1270,7 @@ function addLearnerMessage(text) {
 function renderCoach(coach) {
   const box = $("coach");
   box.replaceChildren();
+  box.classList.remove("expanded");
   if (!coach.correction && !coach.tip && coach.understood) {
     box.hidden = true;
     return;
@@ -1397,9 +1398,19 @@ function setBusy(busy) {
 }
 
 // ---------- call screen ----------
+// Scroll to the end of the call, but never past the start of the latest reply: with the
+// keyboard up there's room for only a few lines, and the question being answered should
+// read from its first line rather than be pushed off the top by the coach below it.
 function scrollCallToBottom() {
   const box = $("call-scroll");
-  requestAnimationFrame(() => box.scrollTo({ top: box.scrollHeight, behavior: "smooth" }));
+  requestAnimationFrame(() => {
+    let top = box.scrollHeight - box.clientHeight;
+    const reply = [...$("transcript").querySelectorAll(".msg.character")].at(-1);
+    if (reply) {
+      top = Math.min(top, reply.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - 8);
+    }
+    box.scrollTo({ top, behavior: "smooth" });
+  });
 }
 
 function setSpeaking(on) {
@@ -1898,6 +1909,12 @@ $("mic").addEventListener("click", () => {
 });
 
 $("pause").addEventListener("click", () => setPaused(!state.paused));
+
+// While typing on a phone the coach shows only its first two lines (CSS); tap it for the rest.
+onTap($("coach"), () => {
+  $("coach").classList.toggle("expanded");
+  $("coach").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}, { selectable: true });
 
 onTap($("explorer-close"), () => {
   $("explorer").hidden = true;
