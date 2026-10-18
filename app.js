@@ -432,7 +432,7 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, t
   const persona = personaFor({ scenario, mode });
   const lines = [
     `You are ${persona.character}, ${persona.setting}. Stay in character and speak only ${language}.`,
-    `The learner is a ${level} ${language} speaker whose native language is ${nativeLanguage}.`,
+    `The learner speaks ${language} at CEFR level ${level}; their native language is ${nativeLanguage}.`,
     "Keep each reply to one or two short sentences that match the learner's level, and end with something they can respond to.",
     m.extra,
     ...(m.usesScene && persona.goal ? [`Scene goal: ${persona.goal}`] : []),
@@ -954,7 +954,7 @@ async function speak(text, wordSpans, onDone) {
   stopSpeaking();
   const token = speakToken;
   const locale = state.settings.locale;
-  const rate = state.settings.level === "beginner" ? 0.9 : 1;
+  const rate = ["A1", "A2"].includes(state.settings.level) ? 0.9 : 1;
   // Make sure the done callback fires exactly once, whichever path plays.
   let done = false;
   const finish = () => {
@@ -1610,13 +1610,16 @@ $("start").addEventListener("click", async () => {
   const mode = $("mode").value;
   const usesScene = (MODES[mode] ?? MODES.scene).usesScene;
   const useVocab = $("use-vocab").checked && !$("use-vocab").disabled;
-  const levels = ["A1", "A2", "B1"].filter((l) => $(`vlev-${l}`)?.checked);
+  // Vocab of the chosen level and the ones below it (the list only goes up to B1).
+  const VOCAB_LEVELS = ["A1", "A2", "B1"];
+  const upTo = VOCAB_LEVELS.indexOf($("level").value);
+  const levels = upTo === -1 ? VOCAB_LEVELS : VOCAB_LEVELS.slice(0, upTo + 1);
 
   let vocab = { enabled: false };
   if (useVocab) {
     // Linked to the trainer: A1/A2 in full plus its learnt B1 words (fetched on page load, so Start never waits).
     const learnt = trainerLink() ? ((await idbGet("learnt_words").catch(() => null)) ?? []) : null;
-    const loaded = await loadVocabForSession(levels.length ? levels : ["A1", "A2", "B1"], learnt);
+    const loaded = await loadVocabForSession(levels, learnt);
     vocab = { enabled: loaded > 0, levels, learnt: Boolean(learnt) };
   }
 
@@ -1733,7 +1736,6 @@ function refreshVocabUI(count) {
   const useVocab = $("use-vocab");
   const have = count > 0;
   useVocab.disabled = !have;
-  $("vocab-levels").style.opacity = have ? "1" : "0.5";
   if (have && !$("vocab-status").textContent) {
     $("vocab-status").textContent = `✓ ${count} words ready.`;
   }
