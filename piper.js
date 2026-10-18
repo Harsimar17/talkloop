@@ -8,10 +8,10 @@ const VOICES_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main";
 const CACHE_NAME = "piper-voices-v1";
 
 // One good voice per app language (Piper has no Japanese voice). German is Thorsten's
-// high-quality voice: the most natural, native-sounding on-device German voice Piper
-// has — clear and easy to follow, and no cloud voice needed.
+// medium voice: clear, and it speaks a reply in a fraction of its length. The high-quality
+// one took about twice as long to make as to play (11 s for 5.6 s of speech on a PC).
 const VOICES = {
-  de: "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx",
+  de: "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
   es: "es/es_ES/davefx/medium/es_ES-davefx-medium.onnx",
   fr: "fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx",
   it: "it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx",
@@ -20,7 +20,7 @@ const VOICES = {
 
 // Voices replaced by the ones above: removed from the cache so they don't take up space.
 const OLD_VOICES = [
-  "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
+  "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx",
   "de/de_DE/thorsten_emotional/medium/de_DE-thorsten_emotional-medium.onnx",
 ];
 
