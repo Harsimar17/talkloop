@@ -8,7 +8,7 @@
     <link rel="apple-touch-icon" href="favicon.svg" />
     <meta name="theme-color" content="#2f5fd0" />
     <!-- ?v= makes phones fetch the new file after a change instead of a cached copy: bump it with each change. -->
-    <link rel="stylesheet" href="styles.css?v=6" />
+    <link rel="stylesheet" href="styles.css?v=8" />
   </head>
   <body>
     <header class="topbar">
@@ -195,7 +195,14 @@
           </div>
         </div>
         <div id="suggestions" class="chips" aria-label="Things you could say"></div>
-        <div id="live" class="live" aria-live="polite"></div>
+        <!-- What the mic has heard; until it is sent (after the pause) it can be fixed or dropped. -->
+        <div id="heard" class="heard" hidden>
+          <div id="live" class="live" aria-live="polite"></div>
+          <div class="heard-actions">
+            <button type="button" id="heard-edit">✎ Edit</button>
+            <button type="button" id="heard-delete">✕ Delete</button>
+          </div>
+        </div>
         <p id="status" class="status"></p>
         <form id="composer" class="composer">
           <input id="text" autocomplete="off" placeholder="Type your reply…" />
@@ -237,6 +244,6 @@
       <ul id="bookmarks" class="bookmarks"></ul>
     </section>
 
-    <script src="app.js?v=16" type="module"></script> <!-- bump with app.js changes, like styles.css above -->
+    <script src="app.js?v=17" type="module"></script> <!-- bump with app.js changes, like styles.css above -->
   </body>
 </html>

@@ -100,6 +100,13 @@ select, input { min-height: 44px; } /* comfortable touch targets; 16px font avoi
 .live { color: var(--muted); font-style: italic; }
 .live:empty { display: none; }
 
+/* What the mic heard, with Edit and Delete before it is sent. */
+.heard { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.heard[hidden] { display: none; }
+.heard .live { flex: 1 1 12rem; min-width: 0; }
+.heard-actions { display: flex; gap: 6px; flex: none; margin-left: auto; }
+.heard-actions button { min-height: 34px; padding: 4px 10px; font-size: 0.85rem; }
+
 .composer { display: flex; gap: 8px; }
 .composer input { flex: 1; min-width: 0; }
 

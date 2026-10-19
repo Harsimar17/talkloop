@@ -838,6 +838,13 @@ async function geminiTts(text) {
 const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
 let recognizer = null;
 let dropNextResult = false; // set when listening is cut short on purpose, so its result is ignored
+let redoNextResult = false; // set by Delete: what was heard is dropped and the mic listens again
+
+// What the mic has heard so far, with Edit and Delete while it can still be changed.
+function showHeard(text) {
+  $("live").textContent = text;
+  $("heard").hidden = !text;
+}
 
 function startListening() {
   if (!Recognition) {
@@ -862,7 +869,7 @@ function startListening() {
   let silenceTimer = null;
   rec.onresult = (event) => {
     heard = Array.from(event.results, (result) => result[0].transcript).join(" ").replace(/\s+/g, " ").trim();
-    $("live").textContent = heard;
+    showHeard(heard);
     if (!heard) return;
     // Any speech restarts the pause timer: after a pause the turn ends. You get time to think.
     clearTimeout(silenceTimer);
@@ -878,10 +885,16 @@ function startListening() {
     if (recognizer !== rec) return;
     recognizer = null;
     setMic(false);
-    $("live").textContent = "";
+    showHeard("");
     const spoken = heard;
     if (dropNextResult) {
       dropNextResult = false; // cut short on purpose (e.g. "Hear it" or Skip in a drill)
+      redoNextResult = false;
+    } else if (redoNextResult) {
+      // Deleted: nothing is sent; hands-free listens again for the new try.
+      redoNextResult = false;
+      maybeResumeListening();
+      setStatus(recognizer ? "Deleted. Say it again." : "Deleted.");
     } else if (state.paused) {
       // Paused mid-sentence: drop it rather than sending half a thought.
     } else if (isPauseCommand(spoken)) {
@@ -2199,6 +2212,28 @@ onTap($("drill-hear"), () => {
 });
 onTap($("drill-skip"), () => endDrill());
 
+// Before what was heard is sent (it goes after the pause): fix it in the text box, or drop it
+// and say it again.
+onTap($("heard-edit"), () => {
+  if (!recognizer) return;
+  const text = $("live").textContent;
+  dropNextResult = true; // the text box has it now: stop the mic without sending
+  recognizer.abort();
+  showHeard("");
+  // Focused inside the tap, so the phone keyboard opens.
+  const input = $("text");
+  input.value = text;
+  input.focus();
+  try { input.setSelectionRange(text.length, text.length); } catch { /* unsupported */ }
+  setStatus("Fix it, then tap Send.");
+});
+onTap($("heard-delete"), () => {
+  if (!recognizer) return;
+  redoNextResult = true;
+  recognizer.abort();
+  showHeard("");
+});
+
 onTap($("explorer-close"), () => {
   $("explorer").hidden = true;
 });
@@ -2219,7 +2254,7 @@ $("end").addEventListener("click", () => {
   $("transcript").replaceChildren();
   $("coach").hidden = true;
   $("suggestions").replaceChildren();
-  $("live").textContent = "";
+  showHeard("");
   $("text").value = "";
   setStatus("");
   renderStats();
