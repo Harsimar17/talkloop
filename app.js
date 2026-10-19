@@ -840,6 +840,39 @@ let recognizer = null;
 let dropNextResult = false; // set when listening is cut short on purpose, so its result is ignored
 let redoNextResult = false; // set by Delete: what was heard is dropped and the mic listens again
 
+// iPhone (Safari, iOS 17+): once a reply has played through the <audio> element the audio
+// session stays set up for playback, and a mic opened then records silence (the orange dot
+// is on, "Listening…" shows, but no words come). So it is switched to recording just before
+// the mic opens, and back to "auto" when listening ends, so replies play as media again.
+// Other browsers have no audio session: this does nothing there.
+function setAudioSession(type) {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = type;
+  } catch {
+    // unsupported value or browser: the default session still works
+  }
+  debugLog(`audio session → ${type}`);
+}
+
+// Open the page with ?debug to see what the mic does, in a few lines at the bottom left
+// (for checking speech recognition on a phone, where there is no console).
+const DEBUG = new URLSearchParams(location.search).has("debug");
+const debugStart = Date.now();
+function debugLog(text) {
+  if (!DEBUG) return;
+  let box = $("debug-log");
+  if (!box) {
+    box = document.createElement("pre");
+    box.id = "debug-log";
+    box.style.cssText = "position:fixed;left:4px;bottom:4px;z-index:9;max-width:75vw;margin:0;padding:6px;"
+      + "font:11px/1.3 monospace;background:rgb(0 0 0 / 0.75);color:#9f9;border-radius:6px;pointer-events:none;white-space:pre-wrap";
+    document.body.append(box);
+  }
+  const lines = box.textContent ? box.textContent.split("\n") : [];
+  lines.push(`${((Date.now() - debugStart) / 1000).toFixed(1)}s ${text}`);
+  box.textContent = lines.slice(-12).join("\n");
+}
+
 // What the mic has heard so far, with Edit and Delete while it can still be changed.
 function showHeard(text) {
   $("live").textContent = text;
@@ -869,6 +902,7 @@ function startListening() {
   let silenceTimer = null;
   rec.onresult = (event) => {
     heard = Array.from(event.results, (result) => result[0].transcript).join(" ").replace(/\s+/g, " ").trim();
+    debugLog(`heard "${heard.slice(-40)}"`);
     showHeard(heard);
     if (!heard) return;
     // Any speech restarts the pause timer: after a pause the turn ends. You get time to think.
@@ -876,14 +910,20 @@ function startListening() {
     silenceTimer = setTimeout(() => rec.stop(), SILENCE_MS);
   };
   rec.onerror = (event) => {
+    debugLog(`error: ${event.error}`);
     if (event.error === "no-speech") setStatus("I'm listening… take your time.");
     else if (event.error === "not-allowed") { state.handsFree = false; setStatus("Microphone permission was denied."); }
     else if (event.error !== "aborted") setStatus(`Speech recognition error: ${event.error}`);
   };
+  // Where a silent mic stops on a phone: no audiostart = the mic never opened; no soundstart =
+  // it hears nothing.
+  if (DEBUG) for (const type of ["audiostart", "soundstart", "speechstart"]) rec.addEventListener(type, () => debugLog(type));
   rec.onend = () => {
     clearTimeout(silenceTimer);
+    debugLog(`mic ended, heard "${heard.slice(0, 40)}"`);
     if (recognizer !== rec) return;
     recognizer = null;
+    setAudioSession("auto");
     setMic(false);
     showHeard("");
     const spoken = heard;
@@ -913,10 +953,14 @@ function startListening() {
       setStatus("");
     }
   };
+  setAudioSession("play-and-record");
   try {
     rec.start();
+    debugLog("mic start");
   } catch (error) {
     // The browser refused to start (e.g. the microphone is still busy): say so, don't pretend to listen.
+    debugLog(`mic start failed: ${error.message}`);
+    setAudioSession("auto");
     recognizer = null;
     state.handsFree = false;
     setMic(false);
@@ -969,15 +1013,18 @@ function startWakeListener() {
   rec.onerror = (event) => { if (event.error === "not-allowed") denied = true; };
   rec.onend = () => {
     wakeRecognizer = null;
+    setAudioSession("auto");
     resolveEnded();
     updateCallState();
     if (heardResume) setPaused(false);
     else if (state.paused && pausedByVoice && !denied) setTimeout(startWakeListener, 300);
   };
   wakeRecognizer = rec;
+  setAudioSession("play-and-record");
   try {
     rec.start();
   } catch {
+    setAudioSession("auto");
     wakeRecognizer = null;
     resolveEnded();
   }
