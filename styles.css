@@ -55,10 +55,9 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; color: var(--muted); min-width: 0; }
-label[hidden] { display: none; }
 /* A select is as wide as its longest option by default; long scene names would push it off screen. */
 .grid select { width: 100%; min-width: 0; text-overflow: ellipsis; }
-.grid label:has(#scenario), .grid label:has(#tense) { grid-column: 1 / -1; } /* long names: give them the full row */
+.grid label:has(#scenario) { grid-column: 1 / -1; } /* scene names are long: give them the full row */
 select, input {
   font: inherit;
   color: var(--text);
@@ -80,7 +79,7 @@ select, input { min-height: 44px; } /* comfortable touch targets; 16px font avoi
 .msg .who { font-size: 0.75rem; color: var(--muted); display: block; }
 .msg .translation { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
 .msg .tools { display: flex; gap: 8px; margin-top: 6px; }
-.msg .tools button { padding: 2px 10px; font-size: 0.8rem; min-height: 32px; } /* small: they sit inside every reply */
+.msg .tools button { padding: 2px 8px; font-size: 0.8rem; }
 .msg .voice-note { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
 
 .word { cursor: pointer; border-radius: 4px; }
@@ -100,13 +99,6 @@ select, input { min-height: 44px; } /* comfortable touch targets; 16px font avoi
 .live { color: var(--muted); font-style: italic; }
 .live:empty { display: none; }
 
-/* What the mic heard, with Edit and Delete before it is sent. */
-.heard { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
-.heard[hidden] { display: none; }
-.heard .live { flex: 1 1 12rem; min-width: 0; }
-.heard-actions { display: flex; gap: 6px; flex: none; margin-left: auto; }
-.heard-actions button { min-height: 34px; padding: 4px 10px; font-size: 0.85rem; }
-
 .composer { display: flex; gap: 8px; }
 .composer input { flex: 1; min-width: 0; }
 
@@ -117,13 +109,8 @@ select, input { min-height: 44px; } /* comfortable touch targets; 16px font avoi
 body.in-call { overflow: hidden; }
 .call {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
+  inset: 0;
   height: var(--vvh, 100dvh); /* follows the on-screen keyboard on phones */
-  /* Shift down by the visual viewport's scroll offset so iOS doesn't strand the
-     dock at the top above the keyboard (see the visualViewport handler in app.js). */
-  transform: translateY(var(--vvtop, 0px));
   z-index: 1;
   display: flex;
   flex-direction: column;
@@ -232,43 +219,15 @@ body.in-call { overflow: hidden; }
 .muted a { color: var(--accent); }
 .keyline { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; font-size: 0.85rem; }
 
-.voice-status { margin: -4px 0 12px; font-size: 0.85rem; }
-.voice-status:empty { display: none; }
 .vocab { border-top: 1px solid var(--border); padding-top: 12px; margin-bottom: 16px; }
 .vocab-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .file-btn { display: inline-block; cursor: pointer; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 0.9rem; }
-.trainer-link { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.trainer-link p { flex: 1; margin: 0; font-size: 0.85rem; }
-.trainer-link button { white-space: nowrap; font-size: 0.85rem; }
-.trainer-form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-.trainer-form[hidden] { display: none; }
-.trainer-form input { flex: 1 1 150px; min-width: 0; font-size: 0.9rem; }
-.trainer-form button { white-space: nowrap; font-size: 0.9rem; }
 .vocab-url-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .vocab-url-row input { flex: 1; min-width: 0; font-size: 0.85rem; }
 .vocab-url-row button { white-space: nowrap; font-size: 0.9rem; }
 .check { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--text); }
 .check input { min-height: auto; width: auto; }
-
-/* Say it again: the corrected sentence to repeat before the reply comes. */
-.drill { border: 1px solid var(--warn); border-radius: 12px; padding: 10px 12px; background: var(--bg); }
-.drill[hidden] { display: none; }
-.drill p { margin: 0; }
-.drill-label { font-size: 0.8rem; color: var(--muted); }
-.drill .drill-target { font-size: 1.1rem; font-weight: 600; margin: 2px 0 6px; }
-.drill .drill-feedback { font-size: 0.85rem; color: var(--warn); margin-bottom: 6px; }
-.drill-feedback:empty { display: none; }
-.drill .drill-feedback.ok { color: var(--good); }
-.drill-actions { display: flex; gap: 8px; }
-.drill-actions button { min-height: 38px; padding: 6px 12px; font-size: 0.9rem; }
-.call[data-state="drill"] .call-state { color: var(--warn); border-color: currentColor; }
-
-.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.card-head button { min-height: 32px; padding: 2px 10px; font-size: 0.85rem; }
-.mistake-focus { display: inline-block; white-space: nowrap; font-size: 0.75rem; color: var(--warn); border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; }
-.mistake-example { font-size: 0.85rem; overflow-wrap: anywhere; }
-.say-again { margin-bottom: 12px; }
-.mistakes-sync { font-size: 0.8rem; margin: 8px 0 0; }
+.vocab-levels { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
 
 .focus { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; font-size: 0.85rem; }
 .focus-label { color: var(--muted); }
@@ -284,36 +243,10 @@ body.in-call { overflow: hidden; }
   .msg { max-width: 92%; }
   .call-scroll { padding: 12px; }
   .call-dock { padding-left: 12px; padding-right: 12px; }
-  /* While typing, the keyboard is up: fold away the big round controls and the vocab
-     row so the input sits right above the keyboard with the transcript still visible. */
-  body.typing .call-controls,
-  body.typing .call-dock .focus { display: none; }
-  body.typing .call-dock { gap: 6px; }
-  /* The keyboard leaves room for only a few lines of conversation: slim the header and the
-     chips, and cut the coach to its first two lines (tap it for the rest). */
-  body.typing .call-head { padding-top: max(6px, env(safe-area-inset-top)); padding-bottom: 6px; }
-  body.typing .avatar { width: 32px; height: 32px; font-size: 0.95rem; }
-  body.typing .caller-name { font-size: 0.95rem; }
-  body.typing .call-scroll { padding-top: 8px; padding-bottom: 8px; }
-  body.typing .coach { padding: 8px 12px; font-size: 0.85rem; cursor: pointer; }
-  body.typing .coach:not(.expanded) p:not(:first-child) { display: none; }
-  body.typing .coach:not(.expanded) p:first-child {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow: hidden;
-  }
-  body.typing .coach:not(.expanded):has(p + p)::after { content: "Tap for more"; display: block; font-size: 0.75rem; color: var(--muted); }
-  body.typing .chips button { min-height: 34px; padding: 4px 12px; font-size: 0.85rem; }
   /* Word explorer becomes a bottom sheet so it never covers the composer awkwardly */
-  /* Its bottom edge follows the visible area (see --vvh/--vvtop in app.js), so with the
-     keyboard up the sheet sits just above it instead of hiding behind it. */
   .explorer {
-    left: 0; right: 0; bottom: auto; width: 100%;
-    top: calc(var(--vvtop, 0px) + var(--vvh, 100dvh));
-    transform: translateY(-100%);
+    left: 0; right: 0; bottom: 0; width: 100%;
     border-radius: 14px 14px 0 0;
-    max-height: calc(var(--vvh, 100dvh) * 0.7); overflow-y: auto;
+    max-height: 70vh; overflow-y: auto;
   }
 }
-#keygate label { margin-bottom: 12px; }

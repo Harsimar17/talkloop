@@ -1,5 +1,5 @@
 // Talkloop client: speech in, AI character turn out, spoken back with word highlighting.
-import { hasPiperVoice, piperLoaded, piperReady, loadPiperVoice, piperSpeak, MOODS } from "./piper.js?v=5"; // bump with piper.js changes so no browser pairs this file with an old copy
+import { hasPiperVoice, piperReady, loadPiperVoice, piperSpeak } from "./piper.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -12,7 +12,6 @@ const state = {
   handsFree: false, // when true, the mic listens, auto-sends on a pause, and resumes after each reply
   speaking: false,
   paused: false, // call on hold: no voice, no mic, timer stopped
-  drill: null, // { target, said, turn } while the learner says a correction again before the reply
 };
 
 const SILENCE_MS = 2500; // how long a pause ends your turn in hands-free mode
@@ -56,59 +55,25 @@ function renderStats() {
   $("rapport").textContent = `♥ ${state.rapport}`;
 }
 
-// ---------- AI services (called directly from the browser with the user's own keys) ----------
-// Conversation runs on Mistral (best German of the free tiers, with Groq as a backup when
-// Mistral is busy) or on Gemini. Gemini is also the backup voice when Piper can't speak.
-// Lite answers in about a second; Flash takes about five, so it is only the fallback.
+// ---------- Gemini API (called directly from the browser with the user's key) ----------
 const CONV_MODEL = "gemini-flash-lite-latest";
-const CONV_FALLBACK_MODEL = "gemini-flash-latest";
 const TTS_MODEL = "gemini-3.8-flash-tts";
 const TTS_VOICE = "Kore";
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
-const MISTRAL = { name: "Mistral", url: "https://api.mistral.ai/v1/chat/completions", model: "mistral-small-latest" };
-const GROQ = {
-  name: "Groq",
-  url: "https://api.groq.com/openai/v1/chat/completions",
-  model: "openai/gpt-oss-120b",
-  extra: { reasoning_effort: "low" }, // keep replies quick enough for a conversation
-};
-
-const memoryKeys = {}; // fallback when localStorage is unavailable
-function getKey(service = "gemini") {
+function getKey() {
   try {
-    return localStorage.getItem(`${service}_key`) || "";
+    return localStorage.getItem("gemini_key") || "";
   } catch {
-    return memoryKeys[service] || "";
+    return "";
   }
 }
-function setKey(service, k) {
-  memoryKeys[service] = k;
+function setKey(k) {
   try {
-    if (k) localStorage.setItem(`${service}_key`, k);
-    else localStorage.removeItem(`${service}_key`);
+    if (k) localStorage.setItem("gemini_key", k);
+    else localStorage.removeItem("gemini_key");
   } catch {
     // storage unavailable; key lives only for this page load
-  }
-}
-
-// Which service runs the conversation. People who only ever saved a Gemini key stay on Gemini.
-function getProvider() {
-  let saved = "";
-  try {
-    saved = localStorage.getItem("talkloop_provider") || "";
-  } catch {
-    saved = memoryKeys.provider || "";
-  }
-  if (saved === "mistral" || saved === "gemini") return saved;
-  return getKey("gemini") && !getKey("mistral") ? "gemini" : "mistral";
-}
-function setProvider(p) {
-  memoryKeys.provider = p;
-  try {
-    localStorage.setItem("talkloop_provider", p);
-  } catch {
-    // storage unavailable
   }
 }
 
@@ -212,32 +177,6 @@ const MODES = {
   },
 };
 
-// Tense practice: the partner steers the talk so the learner has to use this tense,
-// and the coach checks it. "any" adds nothing.
-const TENSES = {
-  any: null,
-  present: {
-    short: "Präsens",
-    form: "the present tense (in German the Präsens: ich spiele, du fährst, er ist)",
-    ask: "what the learner usually does, their routines, likes, family, job and what is happening right now",
-  },
-  perfekt: {
-    short: "Perfekt",
-    form: "the spoken past (in German the Perfekt: haben or sein + Partizip II, e.g. ich habe gekocht, ich bin gefahren)",
-    ask: "what the learner did yesterday, last weekend, on their last holiday or at work this week",
-  },
-  praeteritum: {
-    short: "Präteritum",
-    form: "the simple past used for telling stories (in German the Präteritum: ich ging, ich machte, ich war, ich hatte, ich konnte)",
-    ask: "stories: their childhood, how something happened, a film or book they remember, an adventure",
-  },
-  future: {
-    short: "Futur I",
-    form: "the future (in German Futur I: werden + infinitive, e.g. ich werde reisen)",
-    ask: "the learner's plans for tonight, the weekend, next year, and their dreams",
-  },
-};
-
 // ---------- Vocabulary (user-imported, stored locally in IndexedDB) ----------
 const VOCAB_DB = "talkloop";
 const VOCAB_KV = "kv";
@@ -317,249 +256,51 @@ async function vocabMeta() {
   return { count: words.length, levels: [...new Set(words.map((w) => w.level))].sort() };
 }
 
-// ---------- Link to the Vocab Trainer (only the words learnt there) ----------
-// The trainer's "practise in Talkloop" opens this page with #vocab-link=…&vocab-api=…:
-// a read-only link to the learner's learnt words. It is kept here and the
-// fragment is wiped from the address bar.
-function takeTrainerLinkFromUrl() {
-  const params = new URLSearchParams(location.hash.slice(1));
-  const token = params.get("vocab-link");
-  const api = params.get("vocab-api");
-  if (!token || !/^https?:\/\//.test(api ?? "")) return false;
-  store.set("trainer_link", { token, api: api.replace(/\/+$/, "") });
-  history.replaceState(null, "", location.pathname + location.search);
-  return true;
-}
-
-function trainerLink() {
-  return store.get("trainer_link", null);
-}
-
-// The deployed Vocab Trainer backend; "trainer_api" in localStorage overrides it (e.g. a local one).
-const TRAINER_API = "https://deutsch-vocab-trainer-v2-1.onrender.com";
-
-// Log in to the trainer once and swap the session for the same read-only link the
-// trainer's button hands out. The password is sent only to the trainer and not kept.
-async function connectTrainer(email, password) {
-  const api = store.get("trainer_api", TRAINER_API).replace(/\/+$/, "");
-  const message = async (res) => (await res.json().catch(() => ({}))).message || `Vocab Trainer answered ${res.status}`;
-  const login = await fetch(`${api}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
-  if (login.status === 401) throw new Error("Wrong email or password.");
-  if (!login.ok) throw new Error(await message(login));
-  const { token: session } = await login.json();
-  const res = await fetch(`${api}/api/talkloop/link`, { method: "POST", headers: { Authorization: `Bearer ${session}` } });
-  if (!res.ok) throw new Error(await message(res));
-  store.set("trainer_link", { token: (await res.json()).token, api });
-}
-
-// Learnt words, the least secure first (the trainer sorts them).
-async function fetchLearntWords() {
-  const link = trainerLink();
-  const res = await fetch(`${link.api}/api/talkloop/words`, { headers: { Authorization: `Bearer ${link.token}` } });
-  if (res.status === 401) {
-    store.set("trainer_link", null);
-    throw new Error("The link to the Vocab Trainer has expired. Connect again.");
-  }
-  if (!res.ok) throw new Error(`Vocab Trainer answered ${res.status}`);
-  const { words } = await res.json();
-  return words.map((w) => ({ de: w.de, en: w.en ?? "", example: w.example ?? "", level: w.lvl, cat: w.cat }));
-}
-
 // In-memory state for the active session.
-// Each pool rotates on its own, so a small pool keeps coming back next to a big one.
-let vocabPools = []; // [{ words, pointer }]
+let vocabWords = [];
+let vocabPointer = 0;
 let vocabSeen = new Set();
 
-// The levels counted as known when linked to the trainer: all their words are used.
-// Higher levels use only the words learnt in the trainer.
-const KNOWN_LEVELS = ["A1", "A2"];
-
-function shuffled(list) {
-  const out = [...list];
-  for (let i = out.length - 1; i > 0; i--) {
+async function loadVocabForSession(levels) {
+  const all = (await idbGet("vocab_words")) ?? [];
+  vocabWords = all.filter((w) => levels.includes(w.level));
+  for (let i = vocabWords.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
+    [vocabWords[i], vocabWords[j]] = [vocabWords[j], vocabWords[i]];
   }
-  return out;
-}
-
-// learnt (linked to the trainer): every A1/A2 word, shuffled, plus the learnt B1 words
-// in the trainer's order so the shakiest come up first. Otherwise the imported list, shuffled.
-async function loadVocabForSession(levels, learnt = null) {
-  const all = ((await idbGet("vocab_words")) ?? []).filter((w) => levels.includes(w.level));
-  if (learnt) {
-    const higher = learnt.filter((w) => levels.includes(w.level) && !KNOWN_LEVELS.includes(w.level));
-    const known = shuffled(all.filter((w) => KNOWN_LEVELS.includes(w.level)));
-    vocabPools = [higher, known];
-  } else {
-    vocabPools = [shuffled(all)];
-  }
-  vocabPools = vocabPools.filter((words) => words.length).map((words) => ({ words, pointer: 0 }));
-  vocabBatch = [];
   vocabSeen = new Set((await idbGet("vocab_seen")) ?? []);
-  return vocabPools.reduce((sum, p) => sum + p.words.length, 0);
+  vocabPointer = 0;
+  return vocabWords.length;
 }
 
-// The words offered to the partner, oldest first. Only a few change each turn: a whole new
-// random set every turn made the partner jump from topic to topic to fit them in, while a
-// steady set lets it bring each word in once the talk gets there.
-let vocabBatch = [];
-const VOCAB_TURNOVER = 2; // words replaced per turn
-
-// The words for this turn: last turn's, minus the oldest few, topped up from the pools,
-// shared evenly between them (the learnt B1 words first).
+// Pick the next rotating batch of words to weave into the conversation.
 function nextVocabBatch(n = 12) {
-  const batch = vocabBatch.slice(Math.min(VOCAB_TURNOVER, vocabBatch.length), n);
-  const fresh = [];
-  vocabPools.forEach((pool, i) => {
-    const share = Math.ceil((n - batch.length - fresh.length) / (vocabPools.length - i));
-    // Skip words already offered (a small pool comes round again quickly).
-    for (let k = 0, tries = 0; k < share && tries < pool.words.length; tries++) {
-      const word = pool.words[pool.pointer % pool.words.length];
-      pool.pointer++;
-      if (batch.includes(word) || fresh.includes(word)) continue;
-      fresh.push(word);
-      k++;
-    }
-  });
-  vocabBatch = [...batch, ...fresh];
-  fresh.forEach((w) => vocabSeen.add(w.de));
+  if (!vocabWords.length) return [];
+  const batch = [];
+  for (let scanned = 0; batch.length < n && scanned < vocabWords.length; scanned++) {
+    batch.push(vocabWords[vocabPointer % vocabWords.length]);
+    vocabPointer++;
+  }
+  batch.forEach((w) => vocabSeen.add(w.de));
   idbSet("vocab_seen", [...vocabSeen]).catch(() => {});
-  return vocabBatch;
+  return batch;
 }
 
-// ---------- mistake tracker ----------
-// Every correction is tagged with the kinds of mistake it fixes. The tags are kept per
-// language in this browser, and the ones that keep coming back go into the prompt so the
-// partner sets up sentences that test them: spaced repetition of the learner's own errors.
-const MISTAKE_TYPES = {
-  case_article: "articles and case (der/den/dem, ein/einen, noun gender)",
-  verb_position: "verb position (verb second; verb at the end after weil, dass, wenn)",
-  perfekt_auxiliary: "Perfekt auxiliary (haben or sein)",
-  participle: "past participle form (gegessen, gegangen, gekauft)",
-  separable_verb: "separable verbs (aufstehen: ich stehe früh auf)",
-  verb_ending: "verb endings (ich habe, du hast, er hat)",
-  adjective_ending: "adjective endings (ein guter Kaffee, mit dem neuen Auto)",
-  preposition: "prepositions (in, auf, zu, nach, mit …)",
-  negation: "negation (nicht or kein)",
-  plural: "plural forms",
-  word_choice: "word choice",
-  tense: "tense (another tense where the one being practised was needed)",
-  other: "other",
-};
-const MISTAKE_HALF_LIFE_DAYS = 7; // a mistake counts half as much a week later
-
-function recordMistakes(language, types, said, fix) {
-  const log = store.get("mistakes", {});
-  const at = Date.now();
-  log[language] = [...(log[language] ?? []), ...types.map((type) => ({ type, at, said, fix }))].slice(-300);
-  store.set("mistakes", log);
-}
-
-// Mistake types by how much they still matter: each mistake counts less as it ages, so one
-// you stopped making fades out and one that keeps coming back stays on top.
-function rankedMistakes(language) {
-  const now = Date.now();
-  const byType = new Map();
-  for (const m of store.get("mistakes", {})[language] ?? []) {
-    const t = byType.get(m.type) ?? { type: m.type, count: 0, weight: 0, example: m };
-    t.count++;
-    t.weight += 0.5 ** ((now - m.at) / 86_400_000 / MISTAKE_HALF_LIFE_DAYS);
-    t.example = m; // the log is oldest first, so this ends on the newest
-    byType.set(m.type, t);
-  }
-  return [...byType.values()].filter((t) => MISTAKE_TYPES[t.type]).sort((a, b) => b.weight - a.weight);
-}
-
-// The top 3 that recur (made at least twice), which the partner deliberately tests.
-function recurringMistakes(language) {
-  return rankedMistakes(language).filter((t) => t.count >= 2 && t.type !== "other").slice(0, 3);
-}
-
-// ---------- mistake log sync ----------
-// With the Vocab Trainer linked, the log follows the learner across devices: the trainer
-// keeps the merged log of all of them. Syncs run only when the app opens, when a call ends
-// and when the page is left, and nothing ever waits for one: the prompt always reads the
-// log on this device, so a slow or sleeping trainer can't delay a reply or a call.
-let mistakeSync = null; // the sync in flight, if any
-
-function syncMistakes({ keepalive = false } = {}) {
-  const link = trainerLink();
-  if (!link || mistakeSync) return;
-  const startedAt = Date.now();
-  const since = store.get("mistakes_synced_at", 0);
-  const log = store.get("mistakes", {});
-  const resets = store.get("mistake_resets", {});
-  // Only what this device recorded since its last sync, plus its reset times.
-  const languages = {};
-  for (const language of new Set([...Object.keys(log), ...Object.keys(resets)])) {
-    languages[language] = { resetAt: resets[language] ?? 0, entries: (log[language] ?? []).filter((m) => m.at >= since) };
-  }
-  const body = JSON.stringify({ languages });
-  mistakeSync = fetch(`${link.api}/api/talkloop/mistakes`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${link.token}`, "Content-Type": "application/json" },
-    body,
-    keepalive: keepalive && body.length < 60_000, // a page being left may still send it (64 KB limit)
-  })
-    .then(async (res) => {
-      if (!res.ok) return; // e.g. an expired link: refreshLearntWords tells the learner
-      mergeMistakes((await res.json()).languages ?? {}, startedAt);
-      store.set("mistakes_synced_at", startedAt);
-      renderMistakes();
-    })
-    .catch(() => {}) // offline or asleep: what wasn't sent goes next time
-    .finally(() => { mistakeSync = null; });
-}
-
-// The trainer's merged log replaces this device's, keeping anything recorded here while
-// the sync was under way (it goes up with the next one).
-function mergeMistakes(merged, startedAt) {
-  const local = store.get("mistakes", {});
-  const resets = store.get("mistake_resets", {});
-  const log = { ...local };
-  for (const [language, { resetAt = 0, entries = [] }] of Object.entries(merged)) {
-    resets[language] = Math.max(resets[language] ?? 0, resetAt);
-    const seen = new Set(entries.map((m) => `${m.at}|${m.type}|${m.said}`));
-    const late = (local[language] ?? []).filter((m) => m.at >= startedAt && !seen.has(`${m.at}|${m.type}|${m.said}`));
-    log[language] = [...entries, ...late].filter((m) => m.at > resets[language]).sort((a, b) => a.at - b.at).slice(-300);
-  }
-  store.set("mistake_resets", resets);
-  store.set("mistakes", log);
-}
-
-// The model writes these fields in this order, so coach comes first: it judges the
-// learner's message before writing its own reply and suggestions, whose words it would
-// otherwise credit to the learner. (Gemini needs propertyOrdering for that; the JSON
-// Schema sent to Mistral keeps the order of properties.)
 const TURN_SCHEMA = {
   type: "OBJECT",
   properties: {
-    coach: {
-      type: "OBJECT",
-      properties: {
-        understood: { type: "BOOLEAN" },
-        correction: { type: "STRING" },
-        mistakes: { type: "ARRAY", items: { type: "STRING", enum: Object.keys(MISTAKE_TYPES) } },
-        tip: { type: "STRING" },
-      },
-      required: ["understood", "correction", "mistakes", "tip"],
-      propertyOrdering: ["understood", "correction", "mistakes", "tip"],
-    },
     reply: { type: "STRING" },
     reply_translation: { type: "STRING" },
     suggestions: { type: "ARRAY", items: { type: "STRING" } },
+    coach: {
+      type: "OBJECT",
+      properties: { understood: { type: "BOOLEAN" }, correction: { type: "STRING" }, tip: { type: "STRING" } },
+      required: ["understood", "correction", "tip"],
+    },
     rapport_delta: { type: "INTEGER" },
     conversation_finished: { type: "BOOLEAN" },
-    // How the reply is spoken (the open-source German voice has a recording per mood).
-    mood: { type: "STRING", enum: MOODS },
   },
-  required: ["coach", "reply", "reply_translation", "suggestions", "rapport_delta", "conversation_finished", "mood"],
-  propertyOrdering: ["coach", "reply", "reply_translation", "suggestions", "rapport_delta", "conversation_finished", "mood"],
+  required: ["reply", "reply_translation", "suggestions", "coach", "rapport_delta", "conversation_finished"],
 };
 
 const WORD_SCHEMA = {
@@ -580,153 +321,48 @@ function personaFor({ scenario, mode }) {
   return m.usesScene ? SCENARIOS[scenario] ?? SCENARIOS.cafe : PARTNER;
 }
 
-function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, tense }, targetWords = [], learnt = false, learnerMessage = "", weakSpots = []) {
+function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode }, targetWords = []) {
   const m = MODES[mode] ?? MODES.scene;
   const persona = personaFor({ scenario, mode });
-  const t = TENSES[tense];
-  // In tense practice, an answer in another tense is a mistake too: it gets a correction,
-  // so the learner says it again in the tense being practised.
-  const tenseMistake = t
-    ? ` or does not use ${t.short} where your question called for it (then coach.correction is the learner's message rewritten in ${t.short}, keeping their meaning and words; if it is only a fragment, make it the short full sentence they most likely meant, and list tense in coach.mistakes)`
-    : "";
   const lines = [
     `You are ${persona.character}, ${persona.setting}. Stay in character and speak only ${language}.`,
-    `The learner speaks ${language} at CEFR level ${level}; their native language is ${nativeLanguage}.`,
+    `The learner is a ${level} ${language} speaker whose native language is ${nativeLanguage}.`,
     "Keep each reply to one or two short sentences that match the learner's level, and end with something they can respond to.",
     m.extra,
     ...(m.usesScene && persona.goal ? [`Scene goal: ${persona.goal}`] : []),
     "Speech recognition produced the learner's message, so ignore missing punctuation and obvious transcription slips.",
     `Write reply_translation, coach.tip and nothing else in ${nativeLanguage}.`,
-    learnerMessage
-      ? `Fill coach first, before writing your reply. It judges only the learner's last message, which is exactly: ${JSON.stringify(learnerMessage)}. Give a correction only when that text has a real grammar or word-choice mistake${tenseMistake}; coach.correction is then only the sentence(s) with the mistake, rewritten correctly in ${language}, with no explanation (that goes in coach.tip). With every correction, list in coach.mistakes each kind of mistake it fixes: ${Object.entries(MISTAKE_TYPES).map(([k, d]) => `${k} = ${d}`).join("; ")}. Without a correction, leave coach.mistakes empty. coach.tip may praise or explain something that literally appears in that text; never credit the learner with words, tenses or grammar that are not in it, such as those in your own replies, your suggestions or practice words they did not use. If there is nothing useful to say, leave coach.tip empty.`
-      : "There is no learner message to judge yet: leave coach.correction, coach.mistakes and coach.tip empty.",
-    "Your reply is read aloud, so let your feelings show in the words: react like a real person with short interjections (for example Oh!, Ach wirklich?, Super!, Oh nein!) and use ! and ? where you mean them.",
-    `Set mood to how the reply should sound: ${MOODS.join(", ")}. Use amused for fun or happy replies, surprised for amazement, angry only when the role calls for annoyance, sleepy for tiredness, whisper for secrets, and neutral otherwise.`,
+    "Give a correction only when the learner made a real grammar or word-choice mistake.",
   ];
-  if (t) {
-    lines.push(
-      `The learner wants to practise ${t.form}. Use this tense yourself wherever it fits, and keep steering the conversation so that the natural answer to your question needs it: ask about ${t.ask}. Your very first question, right after the greeting, should already need this tense. Stay in your role while doing so.`,
-      "Write the suggestions in this tense.",
-      "A message in another tense, or with this tense formed wrongly (wrong auxiliary, wrong participle or ending), always gets a coach.correction in this tense, even when it is otherwise correct German; never only a tip. When their message does use it correctly, say so briefly in coach.tip.",
-    );
-  }
-  // The conversation comes first: words are brought in only where they fit the topic, never
-  // by jumping to a new one (that made replies hop from work to politics in one line).
-  const stayOnTopic = "The conversation comes first: every reply follows on from what the learner just said and stays on the current topic. Use a word from this list only where it fits that topic naturally; never change the topic or ask an unrelated question to bring a word in. If none fit, use none: the list stays mostly the same over the next turns, so the chance will come. When the topic has run its course, you may move to a new one where some of the words fit, with a natural bridge from the old one.";
-  if (targetWords.length && learnt) {
+  if (targetWords.length) {
     const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
     lines.push(
-      `The learner already knows these words but now needs to practise using them when speaking: ${list}.`,
-      stayOnTopic,
-      "Otherwise speak as you normally would: you are not limited to these words. Where one fits, use it in your reply, or ask a question on the current topic whose natural answer needs it, so the learner gets to use it too. Never list or quiz the words.",
-      "Only when the learner's message actually contains one of these words, check it: if it is right, say so briefly in coach.tip; if the meaning, article or form is wrong, give the fix in coach.correction.",
-    );
-  } else if (targetWords.length) {
-    const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
-    lines.push(
-      `The learner is practising this vocabulary: ${list}.`,
-      stayOnTopic,
-      "Where they fit, weave one to three of these words or phrases into your reply, keep it natural, and give the learner a chance to use them too.",
-    );
-  }
-  if (weakSpots.length) {
-    const clip = (t) => JSON.stringify(t.length > 120 ? `${t.slice(0, 117)}…` : t);
-    const list = weakSpots.map((m) => `${MISTAKE_TYPES[m.type]} (recently they said ${clip(m.example.said)}; correct: ${clip(m.example.fix)})`).join("; ");
-    lines.push(
-      `The learner keeps making these mistakes, most frequent first: ${list}.`,
-      "Deliberately set up chances to get them right: about every second question, ask something on the current topic whose natural answer needs one of these structures, taking them in turn. Stay natural and in your role, never say that you are testing them, and don't explain grammar in your reply; the coach handles corrections.",
+      `The learner is practising this vocabulary. Naturally weave two to four of these words or phrases into your reply where they fit — do not force all of them, keep it natural, and give the learner a chance to use them too: ${list}.`,
     );
   }
   return lines.join("\n");
 }
 
-// The schemas above are in Gemini's format; OpenAI-style APIs want standard JSON Schema.
-function toJsonSchema(s) {
-  const out = { type: s.type.toLowerCase() };
-  if (s.properties) {
-    out.properties = Object.fromEntries(Object.entries(s.properties).map(([k, v]) => [k, toJsonSchema(v)]));
-  }
-  if (s.items) out.items = toJsonSchema(s.items);
-  if (s.enum) out.enum = s.enum;
-  if (s.required) out.required = s.required;
-  return out;
-}
-
-function parseModelJson(text) {
+async function geminiJson({ systemInstruction, schema, contents }) {
+  const key = getKey();
+  if (!key) throw new Error("Add your Gemini API key to start.");
+  const res = await fetch(`${API_BASE}/${CONV_MODEL}:generateContent?key=${encodeURIComponent(key)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemInstruction }] },
+      contents,
+      generationConfig: { responseMimeType: "application/json", responseSchema: schema, temperature: 0.8 },
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error?.message ?? `Request failed (${res.status})`);
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ?? "";
   try {
     return JSON.parse(text);
   } catch {
     throw new Error("The model returned an unreadable response. Please try again.");
   }
-}
-
-// One request to an OpenAI-compatible chat API (Mistral, Groq). Returns the fetch Response.
-function chatRequest(service, key, { systemInstruction, schema, contents }) {
-  const messages = [
-    {
-      role: "system",
-      content: `${systemInstruction}\n\nAnswer with only a JSON object that matches this JSON Schema:\n${JSON.stringify(toJsonSchema(schema))}`,
-    },
-    ...contents.map((c) => ({
-      role: c.role === "model" ? "assistant" : "user",
-      content: c.parts.map((p) => p.text).join(""),
-    })),
-  ];
-  return fetch(service.url, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model: service.model,
-      messages,
-      response_format: { type: "json_object" },
-      temperature: 0.8,
-      ...service.extra,
-    }),
-  });
-}
-
-async function chatJson(request) {
-  const mistralKey = getKey("mistral");
-  const groqKey = getKey("groq");
-  if (!mistralKey) throw new Error("Add your Mistral API key to start.");
-  let service = MISTRAL;
-  let res = await chatRequest(MISTRAL, mistralKey, request);
-  // Mistral's free tier is rate-limited (429) and sometimes overloaded (5xx); Groq takes over.
-  if ((res.status === 429 || res.status >= 500) && groqKey) {
-    service = GROQ;
-    res = await chatRequest(GROQ, groqKey, request);
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const message = data.error?.message ?? data.message ?? data.detail ?? `Request failed (${res.status})`;
-    throw new Error(`${service.name}: ${typeof message === "string" ? message : JSON.stringify(message)}`);
-  }
-  return parseModelJson(data.choices?.[0]?.message?.content ?? "");
-}
-
-function aiJson(request) {
-  return getProvider() === "mistral" ? chatJson(request) : geminiJson(request);
-}
-
-async function geminiJson({ systemInstruction, schema, contents }) {
-  const key = getKey("gemini");
-  if (!key) throw new Error("Add your Gemini API key to start.");
-  const request = (model) =>
-    fetch(`${API_BASE}/${model}:generateContent?key=${encodeURIComponent(key)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        contents,
-        generationConfig: { responseMimeType: "application/json", responseSchema: schema, temperature: 0.8 },
-      }),
-    });
-  let res = await request(CONV_MODEL);
-  // When one model is overloaded (503) or out of free quota (429), the other usually isn't.
-  if (res.status === 503 || res.status === 429) res = await request(CONV_FALLBACK_MODEL);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error?.message ?? `Request failed (${res.status})`);
-  return parseModelJson(data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ?? "");
 }
 
 function historyToContents(history, userText) {
@@ -738,13 +374,12 @@ function historyToContents(history, userText) {
   return contents;
 }
 
-async function chatTurn(settings, history, message) {
+async function geminiTurn(settings, history, message) {
   const mode = MODES[settings.request.mode] ?? MODES.scene;
   const userText = message.trim() || mode.opener;
-  const learnt = Boolean(settings.vocab?.learnt);
-  const targetWords = settings.vocab?.enabled ? nextVocabBatch(learnt ? 8 : 12) : [];
-  const turn = await aiJson({
-    systemInstruction: turnSystemPrompt(settings.request, targetWords, learnt, message.trim(), recurringMistakes(settings.request.language)),
+  const targetWords = settings.vocab?.enabled ? nextVocabBatch() : [];
+  const turn = await geminiJson({
+    systemInstruction: turnSystemPrompt(settings.request, targetWords),
     schema: TURN_SCHEMA,
     contents: historyToContents(history, userText),
   });
@@ -754,8 +389,8 @@ async function chatTurn(settings, history, message) {
   return { turn, userText };
 }
 
-async function wordInfo({ word, sentence, language, nativeLanguage }) {
-  return aiJson({
+async function geminiWord({ word, sentence, language, nativeLanguage }) {
+  return geminiJson({
     systemInstruction: `You are a concise ${language} dictionary for a ${nativeLanguage} speaker. Write translations in ${nativeLanguage}.`,
     schema: WORD_SCHEMA,
     contents: [{ role: "user", parts: [{ text: `Explain the word "${word}" as it is used in: "${sentence}"` }] }],
@@ -837,112 +472,51 @@ async function geminiTts(text) {
 // ---------- speech recognition (browser) ----------
 const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
 let recognizer = null;
-let dropNextResult = false; // set when listening is cut short on purpose, so its result is ignored
-let redoNextResult = false; // set by Delete: what was heard is dropped and the mic listens again
-
-// iPhone (Safari, iOS 17+): once a reply has played through the <audio> element the audio
-// session stays set up for playback, and a mic opened then records silence (the orange dot
-// is on, "Listening…" shows, but no words come). So it is switched to recording just before
-// the mic opens, and back to "auto" when listening ends, so replies play as media again.
-// Other browsers have no audio session: this does nothing there.
-function setAudioSession(type) {
-  try {
-    if (navigator.audioSession) navigator.audioSession.type = type;
-  } catch {
-    // unsupported value or browser: the default session still works
-  }
-  debugLog(`audio session → ${type}`);
-}
-
-// Open the page with ?debug to see what the mic does, in a few lines at the bottom left
-// (for checking speech recognition on a phone, where there is no console).
-const DEBUG = new URLSearchParams(location.search).has("debug");
-const debugStart = Date.now();
-function debugLog(text) {
-  if (!DEBUG) return;
-  let box = $("debug-log");
-  if (!box) {
-    box = document.createElement("pre");
-    box.id = "debug-log";
-    box.style.cssText = "position:fixed;left:4px;bottom:4px;z-index:9;max-width:75vw;margin:0;padding:6px;"
-      + "font:11px/1.3 monospace;background:rgb(0 0 0 / 0.75);color:#9f9;border-radius:6px;pointer-events:none;white-space:pre-wrap";
-    document.body.append(box);
-  }
-  const lines = box.textContent ? box.textContent.split("\n") : [];
-  lines.push(`${((Date.now() - debugStart) / 1000).toFixed(1)}s ${text}`);
-  box.textContent = lines.slice(-20).join("\n");
-}
-
-// What the mic has heard so far, with Edit and Delete while it can still be changed.
-function showHeard(text) {
-  $("live").textContent = text;
-  $("heard").hidden = !text;
-}
 
 function startListening() {
   if (!Recognition) {
     setStatus("Voice input needs Chrome or Edge. You can still type.");
     return;
   }
-  if (recognizer) return; // one listening session at a time
   stopSpeaking();
-  // This session's recognizer: its handlers and pause timer use it, not the shared variable,
-  // so a session that ends late (e.g. aborted by "Hear it") can't unhook the next one.
-  const rec = new Recognition();
-  recognizer = rec;
-  rec.lang = state.settings.locale;
-  rec.interimResults = true;
+  setAudioSession("auto");
+  recognizer = new Recognition();
+  recognizer.lang = state.settings.locale;
+  recognizer.interimResults = true;
   // Keep listening through pauses; a longer silence ends the turn.
-  rec.continuous = true;
+  recognizer.continuous = true;
 
-  // Everything heard so far, rebuilt from all the results each time. Safari on iPhone often
-  // never marks results final, and a session can end by itself before they are, so interim
-  // text counts too (rebuilding means a result sent again isn't counted twice).
-  let heard = "";
+  let finalText = "";
   let silenceTimer = null;
-  rec.onresult = (event) => {
-    heard = Array.from(event.results, (result) => result[0].transcript).join(" ").replace(/\s+/g, " ").trim();
-    debugLog(`heard "${heard.slice(-40)}"`);
-    showHeard(heard);
-    if (!heard) return;
-    // Any speech restarts the pause timer: after a pause the turn ends. You get time to think.
+  const armSilence = () => {
     clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(() => rec.stop(), SILENCE_MS);
+    // Auto-stop after a pause so the turn sends hands-free. You get time to think.
+    silenceTimer = setTimeout(() => recognizer?.stop(), SILENCE_MS);
   };
-  rec.onerror = (event) => {
-    debugLog(`error: ${event.error}`);
+
+  recognizer.onresult = (event) => {
+    let interim = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      if (result.isFinal) finalText += result[0].transcript + " ";
+      else interim += result[0].transcript;
+    }
+    $("live").textContent = (finalText + interim).trim();
+    if (finalText.trim()) armSilence();
+  };
+  recognizer.onerror = (event) => {
     if (event.error === "no-speech") setStatus("I'm listening… take your time.");
     else if (event.error === "not-allowed") { state.handsFree = false; setStatus("Microphone permission was denied."); }
     else if (event.error !== "aborted") setStatus(`Speech recognition error: ${event.error}`);
   };
-  // Where a silent mic stops on a phone: no audiostart = the mic never opened; no soundstart =
-  // it hears nothing.
-  if (DEBUG) for (const type of ["audiostart", "soundstart", "speechstart", "speechend", "soundend", "audioend"]) rec.addEventListener(type, () => debugLog(type));
-  rec.onend = () => {
+  recognizer.onend = () => {
     clearTimeout(silenceTimer);
-    debugLog(`mic ended, heard "${heard.slice(0, 40)}"`);
-    if (recognizer !== rec) return;
     recognizer = null;
-    setAudioSession("auto");
     setMic(false);
-    showHeard("");
-    const spoken = heard;
-    if (dropNextResult) {
-      dropNextResult = false; // cut short on purpose (e.g. "Hear it" or Skip in a drill)
-      redoNextResult = false;
-    } else if (redoNextResult) {
-      // Deleted: nothing is sent; hands-free listens again for the new try.
-      redoNextResult = false;
-      maybeResumeListening();
-      setStatus(recognizer ? "Deleted. Say it again." : "Deleted.");
-    } else if (state.paused) {
+    $("live").textContent = "";
+    const spoken = finalText.trim();
+    if (state.paused) {
       // Paused mid-sentence: drop it rather than sending half a thought.
-    } else if (isPauseCommand(spoken)) {
-      setPaused(true, { byVoice: true });
-    } else if (state.drill && spoken) {
-      // Saying the corrected sentence: check it; hands-free listens again after a miss.
-      if (isSkipCommand(spoken)) endDrill();
-      else if (!checkDrill(spoken)) maybeResumeListening();
     } else if (spoken) {
       // Hands-free: send straight away. Listening resumes after the reply is spoken.
       sendTurn(spoken);
@@ -953,87 +527,9 @@ function startListening() {
       setStatus("");
     }
   };
-  setAudioSession("play-and-record");
-  try {
-    rec.start();
-    debugLog("mic start");
-  } catch (error) {
-    // The browser refused to start (e.g. the microphone is still busy): say so, don't pretend to listen.
-    debugLog(`mic start failed: ${error.message}`);
-    setAudioSession("auto");
-    recognizer = null;
-    state.handsFree = false;
-    setMic(false);
-    setStatus(`The microphone didn't start (${error.message}). Tap the mic to try again.`);
-    return;
-  }
+  recognizer.start();
   setMic(true);
   setStatus("Listening… just talk. Tap the mic to stop hands-free.");
-}
-
-// ---------- voice commands: "zwei Minuten" pauses the call, "zurück" / "back" resumes ----------
-// Only short utterances count, so "Ich warte zwei Minuten auf den Bus" is still sent normally.
-function normalizeSpeech(text) {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\b2\b/g, "zwei").replace(/\s+/g, " ").trim();
-}
-function isPauseCommand(text) {
-  const t = normalizeSpeech(text);
-  return t.split(" ").length <= 4 && /\bzwei minuten\b/.test(t);
-}
-function isResumeCommand(text) {
-  const t = normalizeSpeech(text);
-  // de-DE recognition may hear the English "back" as "Beck" or "bäck".
-  // (\b doesn't treat ü as a letter, so use Unicode-aware word edges.)
-  return t.split(" ").length <= 5 && /(?<!\p{L})(zurück|zurueck|back|beck|bäck|bin wieder da)(?!\p{L})/u.test(t);
-}
-
-// While paused by voice, keep a quiet listener running that only waits for the resume word.
-// Speech recognition stops by itself after a while, so it restarts until the call resumes.
-let wakeRecognizer = null;
-let wakeEnded = null; // resolves when the wake listener has fully stopped
-function startWakeListener() {
-  if (!Recognition || wakeRecognizer || !state.paused) return;
-  const rec = new Recognition();
-  rec.lang = state.settings.locale;
-  rec.interimResults = true;
-  rec.continuous = true;
-  let heardResume = false;
-  let denied = false;
-  let resolveEnded;
-  wakeEnded = new Promise((r) => { resolveEnded = r; });
-  rec.onresult = (event) => {
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      if (isResumeCommand(event.results[i][0].transcript)) {
-        heardResume = true;
-        rec.abort();
-        return;
-      }
-    }
-  };
-  rec.onerror = (event) => { if (event.error === "not-allowed") denied = true; };
-  rec.onend = () => {
-    wakeRecognizer = null;
-    setAudioSession("auto");
-    resolveEnded();
-    updateCallState();
-    if (heardResume) setPaused(false);
-    else if (state.paused && pausedByVoice && !denied) setTimeout(startWakeListener, 300);
-  };
-  wakeRecognizer = rec;
-  setAudioSession("play-and-record");
-  try {
-    rec.start();
-  } catch {
-    setAudioSession("auto");
-    wakeRecognizer = null;
-    resolveEnded();
-  }
-  updateCallState();
-}
-function stopWakeListener() {
-  if (!wakeRecognizer) return Promise.resolve();
-  wakeRecognizer.abort();
-  return wakeEnded;
 }
 
 function stopListening() {
@@ -1092,30 +588,35 @@ function voicesReady() {
 }
 
 let currentAudio = null;
+let currentSource = null;
 let currentHighlight = null;
 let speakToken = 0; // bumps on every speak/stop so a slow TTS reply can't play over a newer one
 
-// All generated speech plays through this one <audio> element. Safari only lets audio
-// play after a network wait if a tap started it first, so the element is primed on the
-// first tap and reused: once unlocked it stays unlocked, also after the mic was used.
-// (Web Audio was dropped: on iPhone the mic, a route change or a call can leave an
-// AudioContext reporting "running" with its clock frozen, so a reply never played or
-// ended. It is also muted by the ring switch, which media playback is not, so the
-// audio session no longer has to be switched back and forth around every reply.)
+// A single AudioContext, unlocked on the first user tap. Playing generated audio
+// through Web Audio is far more reliable than <audio> in Safari / on iPhone.
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) audioCtx = new AC();
+  }
+  return audioCtx;
+}
+
+// One shared <audio> element. On iPhone, speech recognition takes over the audio
+// session and suspends Web Audio; an element primed inside a tap can still play then.
 const player = new Audio();
 player.setAttribute("playsinline", "");
 let playerPrimed = false;
 
-// Unload the player once a reply has finished or been stopped. On iPhone a player still
-// holding a clip keeps Safari set up for playback, and a mic opened then records silence
-// ("Listening…" with the mic on, but no words). It stays unlocked for the next reply.
-function releasePlayer() {
-  const src = player.getAttribute("src");
-  if (!src) return;
-  player.removeAttribute("src");
-  player.load();
-  if (src.startsWith("blob:")) URL.revokeObjectURL(src);
-  debugLog("player released");
+// iOS 17+: route speech like media (plays with the ring switch on silent).
+// Listening switches it back to "auto" so the mic still works.
+function setAudioSession(type) {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = type;
+  } catch {
+    // unsupported value or browser; the default session still works
+  }
 }
 
 // Runs inside every user gesture so Safari lets audio play later, after network waits.
@@ -1125,6 +626,15 @@ function unlockAudio() {
     playerPrimed = true;
     player.src = pcmToWavUrl(new Uint8Array(480)); // 10 ms of silence
     player.play().catch(() => { playerPrimed = false; });
+  }
+  const ctx = getAudioCtx();
+  if (ctx && ctx.state !== "running") {
+    ctx.resume().catch(() => {});
+    // Safari only truly unlocks once something is started inside the gesture.
+    const blip = ctx.createBufferSource();
+    blip.buffer = ctx.createBuffer(1, 1, 22050);
+    blip.connect(ctx.destination);
+    blip.start();
   }
   // Safari's speech synthesis also needs one gesture-initiated utterance.
   if (!speechPrimed && "speechSynthesis" in window) {
@@ -1144,63 +654,25 @@ function rememberTts(text, audio) {
   if (ttsCache.size > TTS_CACHE_MAX) ttsCache.delete(ttsCache.keys().next().value);
 }
 
-// Get the open-source voice ready in the background (download the first time, then load
-// it into memory), showing progress on the setup screen and in the call.
-const piperLoads = new Map(); // locale -> Promise
-function setVoiceStatus(text) {
-  $("voice-status").textContent = text;
-  const inCall = !$("conversation").hidden;
-  const mine = $("status").textContent.startsWith("Voice:");
-  if (inCall && !state.busy && !state.paused && (mine || !$("status").textContent)) setStatus(text);
-  else if (!text && mine) setStatus("");
-}
+// Start downloading the open-source voice in the background, showing progress.
 function preloadPiper(locale) {
   if (!hasPiperVoice(locale)) return Promise.reject(new Error("no open-source voice for this language"));
-  if (piperLoaded(locale)) return loadPiperVoice(locale);
-  if (!piperLoads.has(locale)) {
+  return loadPiperVoice(locale, (got, total) => {
     const mb = (n) => Math.round(n / 1e6);
-    setVoiceStatus("Voice: getting ready…");
-    const p = loadPiperVoice(locale, (got, total) => {
-      setVoiceStatus(`Voice: downloading (one time) ${mb(got)}${total ? ` / ${mb(total)}` : ""} MB…`);
-    }).then(
-      (voice) => {
-        if ($("language").selectedOptions[0]?.dataset.locale === locale || state.settings?.locale === locale) {
-          setVoiceStatus("");
-          $("voice-status").textContent = "✓ Voice ready";
-        }
-        return voice;
-      },
-      (error) => {
-        piperLoads.delete(locale); // allow another try later
-        setVoiceStatus("Voice: download failed, using a backup voice for now.");
-        throw error;
-      },
-    );
-    piperLoads.set(locale, p);
-  }
-  return piperLoads.get(locale);
+    if (!state.busy) setStatus(`Downloading the natural voice (one time): ${mb(got)}${total ? ` / ${mb(total)}` : ""} MB…`);
+  }).then((voice) => {
+    if ($("status").textContent.startsWith("Downloading the natural voice")) setStatus("");
+    return voice;
+  });
 }
 
-// Load the voice for the language picked on the setup screen, before the call starts.
-function preloadSelectedVoice() {
-  const locale = $("language").selectedOptions[0]?.dataset.locale;
-  if (!locale) return;
-  if (!hasPiperVoice(locale)) {
-    $("voice-status").textContent = "";
-    return;
-  }
-  preloadPiper(locale).catch((error) => console.warn("Piper voice failed to load:", error));
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// Voice order: Piper (open-source, runs on the device, unlimited) → Gemini (small
-// daily free quota) → the browser's built-in voice.
-async function speak(text, wordSpans, onDone, mood = "neutral") {
+// Voice order: Gemini (most natural, small daily free quota) → Piper (open-source,
+// runs on the device, unlimited) → the browser's built-in voice.
+async function speak(text, wordSpans, onDone) {
   stopSpeaking();
   const token = speakToken;
   const locale = state.settings.locale;
-  const rate = ["A1", "A2"].includes(state.settings.level) ? 0.9 : 1;
+  const rate = state.settings.level === "beginner" ? 0.9 : 1;
   // Make sure the done callback fires exactly once, whichever path plays.
   let done = false;
   const finish = () => {
@@ -1220,57 +692,47 @@ async function speak(text, wordSpans, onDone, mood = "neutral") {
     if (token !== speakToken) return; // stopped or superseded while audio was generating
     noteVoice(wordSpans, note);
     setSpeaking(true);
-    playSpeech(audio.pcm, audio.sampleRate, wordSpans, finish, fallback);
+    playCloudAudio(audio.pcm, audio.sampleRate, wordSpans, finish, fallback);
   };
   noteVoice(wordSpans, "");
+  setAudioSession("playback");
 
-  const cached = ttsCache.get(`${locale}|${mood}|${text}`);
+  const cached = ttsCache.get(`${locale}|${text}`);
   if (cached) return play(cached.audio, cached.note);
 
-  // 1. Piper, once it's loaded. A reply never waits for a download: until the voice is
-  //    ready, it starts loading and this reply uses the next voice. If it's already
-  //    downloaded and only loading into memory, give it a moment first.
-  let piperNote = "";
-  if (hasPiperVoice(locale)) {
-    if (!piperLoaded(locale)) {
-      const loading = preloadPiper(locale).catch(() => null);
-      if (await piperReady(locale)) await Promise.race([loading, sleep(1500)]);
-      if (token !== speakToken) return;
-    }
-    if (piperLoaded(locale)) {
-      try {
-        const audio = await piperSpeak(text, locale, { speed: rate, mood });
-        rememberTts(`${locale}|${mood}|${text}`, { audio, note: "" });
-        return play(audio, "");
-      } catch (error) {
-        console.warn("Piper voice failed:", error);
-        piperNote = `open-source voice failed: ${error.message}`;
-      }
-    } else {
-      piperNote = "open-source voice still loading";
-    }
-  } else {
-    piperNote = "no open-source voice for this language";
-  }
-  if (token !== speakToken) return;
-
-  // 2. Gemini, while the free daily quota lasts.
-  let reason = piperNote;
-  if (!getKey()) reason += " · no API key";
-  else if (geminiTtsBlocked()) reason += " · Gemini voice daily limit reached";
+  let reason = "";
+  if (!getKey()) reason = "no API key";
+  else if (geminiTtsBlocked()) reason = "Gemini voice daily limit reached";
   else {
     try {
       const audio = await geminiTts(text);
-      const note = `Gemini voice — ${piperNote}`;
-      rememberTts(`${locale}|${mood}|${text}`, { audio, note });
-      return play(audio, note);
+      rememberTts(`${locale}|${text}`, { audio, note: "" });
+      return play(audio, "");
     } catch (error) {
       if (token !== speakToken) return;
-      reason += geminiTtsBlocked() ? " · Gemini voice daily limit reached" : ` · ${error.message}`;
+      reason = geminiTtsBlocked() ? "Gemini voice daily limit reached" : error.message;
     }
   }
 
-  // 3. The browser's built-in voice.
+  // Use the on-device voice once it's downloaded; until then, start the download
+  // and use the browser voice for this reply so nobody waits.
+  if (hasPiperVoice(locale)) {
+    if (await piperReady(locale)) {
+      try {
+        const audio = await piperSpeak(text, locale, { speed: rate });
+        const note = "Open-source voice (Piper)";
+        rememberTts(`${locale}|${text}`, { audio, note });
+        return play(audio, note);
+      } catch (error) {
+        console.warn("Piper voice failed:", error);
+        reason = `open-source voice failed: ${error.message}`;
+      }
+    } else {
+      preloadPiper(locale).catch((error) => console.warn("Piper download failed:", error));
+      reason += " · downloading the natural voice";
+    }
+  }
+  if (token !== speakToken) return;
   fallback(reason);
 }
 
@@ -1282,39 +744,70 @@ function startHighlight(wordSpans, elapsedFn, duration) {
   }, 80);
 }
 
-// Play 16-bit PCM through the primed <audio> element, highlighting words as it goes.
-// onFail (the browser voice) runs if the element refuses to play.
-function playSpeech(pcm, sampleRate, wordSpans, onDone, onFail) {
+async function playCloudAudio(pcm, sampleRate, wordSpans, onDone, onFail) {
   const token = speakToken;
-  const url = pcmToWavUrl(pcm, sampleRate);
-  const duration = pcm.byteLength / 2 / sampleRate;
-  const audio = player;
-  if (audio.src.startsWith("blob:")) URL.revokeObjectURL(audio.src); // an interrupted reply's audio
-  currentAudio = audio;
-  let settled = false;
-  const end = (ok, reason) => {
-    if (settled) return;
-    settled = true;
-    URL.revokeObjectURL(url);
-    // Stopped or replaced (e.g. its play() rejects only after Replay started the next one):
-    // the player and the highlight belong to the newer reply now, so leave them alone.
+  const ctx = getAudioCtx();
+  if (!ctx) {
+    playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail);
+    return;
+  }
+  if (ctx.state !== "running") {
+    await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 300))]);
     if (token !== speakToken) return;
+    // A still-suspended context (iPhone after the mic was used) would play silently
+    // and never end; try the primed <audio> element instead.
+    if (ctx.state !== "running") {
+      playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail);
+      return;
+    }
+  }
+
+  // 16-bit little-endian mono PCM -> AudioBuffer.
+  const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  const samples = Math.floor(pcm.byteLength / 2);
+  const buffer = ctx.createBuffer(1, samples, sampleRate);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < samples; i++) channel[i] = view.getInt16(i * 2, true) / 32768;
+
+  const clear = () => {
     if (currentHighlight) { clearInterval(currentHighlight); currentHighlight = null; }
-    audio.onended = audio.onerror = null;
-    releasePlayer();
     wordSpans.forEach((span) => span.classList.remove("speaking"));
-    if (ok) onDone();
-    else onFail(reason);
   };
-  audio.onended = () => end(true);
-  audio.onerror = () => end(false, "audio could not be played");
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(ctx.destination);
+  currentSource = src;
+  const startedAt = ctx.currentTime;
+  currentHighlight = startHighlight(wordSpans, () => ctx.currentTime - startedAt, buffer.duration);
+  src.onended = () => { currentSource = null; clear(); onDone(); };
+  try {
+    src.start();
+  } catch (error) {
+    currentSource = null;
+    clear();
+    onFail(error.message);
+  }
+}
+
+// Plays through the shared <audio> element, for browsers without Web Audio or
+// when the AudioContext is suspended.
+function playCloudAudioWav(pcm, sampleRate, wordSpans, onDone, onFail) {
+  const url = pcmToWavUrl(pcm, sampleRate);
+  const audio = player;
   audio.src = url;
-  audio.play().then(
-    () => {
-      if (token === speakToken && !settled) currentHighlight = startHighlight(wordSpans, () => audio.currentTime, duration);
-    },
-    (error) => end(false, error.message),
-  );
+  currentAudio = audio;
+  audio.ontimeupdate = () => {
+    if (!audio.duration || !wordSpans.length) return;
+    const i = Math.min(wordSpans.length - 1, Math.floor((audio.currentTime / audio.duration) * wordSpans.length));
+    wordSpans.forEach((span, idx) => span.classList.toggle("speaking", idx === i));
+  };
+  const clear = () => {
+    wordSpans.forEach((span) => span.classList.remove("speaking"));
+    URL.revokeObjectURL(url);
+  };
+  audio.onended = () => { clear(); onDone(); };
+  audio.onerror = () => { clear(); onFail("audio could not be played"); };
+  audio.play().catch((error) => { clear(); onFail(error.message); });
 }
 
 async function browserSpeak(text, rate, wordSpans, onDone) {
@@ -1352,15 +845,16 @@ function stopSpeaking() {
   setSpeaking(false);
   if (currentHighlight) { clearInterval(currentHighlight); currentHighlight = null; }
   document.querySelectorAll(".word.speaking").forEach((span) => span.classList.remove("speaking"));
+  if (currentSource) {
+    try { currentSource.onended = null; currentSource.stop(); } catch { /* already stopped */ }
+    currentSource = null;
+  }
   if (currentAudio) {
-    currentAudio.onended = currentAudio.onerror = null;
+    currentAudio.onended = currentAudio.onerror = currentAudio.ontimeupdate = null;
     currentAudio.pause();
     currentAudio = null;
-    releasePlayer();
   }
-  // Only when the browser voice is in use: on iOS, cancelling the speech engine for
-  // nothing still churns the audio session the reply is about to play through.
-  if ("speechSynthesis" in window && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
 }
 
 // ---------- transcript rendering ----------
@@ -1375,7 +869,7 @@ function wordify(container, text, sentence) {
       span.textContent = chunk;
       span.dataset.start = String(match.index);
       span.dataset.end = String(match.index + chunk.length);
-      onTap(span, () => openExplorer(chunk, sentence), { selectable: true });
+      span.addEventListener("click", () => openExplorer(chunk, sentence));
       container.append(span);
       spans.push(span);
     } else {
@@ -1403,11 +897,10 @@ function addCharacterMessage(turn) {
   tools.className = "tools";
   const replay = document.createElement("button");
   replay.textContent = "▶ Replay";
-  // onTap so these work mid-typing without dropping the keyboard.
-  onTap(replay, () => speak(turn.reply, spans, null, turn.mood));
+  replay.addEventListener("click", () => speak(turn.reply, spans));
   const translate = document.createElement("button");
   translate.textContent = "Translate";
-  onTap(translate, () => {
+  translate.addEventListener("click", () => {
     translation.hidden = !translation.hidden;
   });
   tools.append(replay, translate);
@@ -1417,23 +910,15 @@ function addCharacterMessage(turn) {
   scrollCallToBottom();
   // A reply that arrives while the call is paused is spoken on resume.
   if (state.paused) {
-    pendingReply = { text: turn.reply, spans, mood: turn.mood };
+    pendingReply = { text: turn.reply, spans };
     return;
   }
   // When hands-free, start listening again once the character finishes speaking.
-  speak(turn.reply, spans, () => maybeResumeListening(), turn.mood);
+  speak(turn.reply, spans, () => maybeResumeListening());
 }
 
-// Hands-free listens again a moment after the voice has stopped: on iPhone a mic opened in
-// the same instant records silence while Safari is still switching from playing to recording.
-const MIC_AFTER_VOICE_MS = 700;
 function maybeResumeListening() {
-  const wait = voiceEndedAt + MIC_AFTER_VOICE_MS - Date.now();
-  if (wait > 0) {
-    setTimeout(maybeResumeListening, wait);
-    return;
-  }
-  if (state.handsFree && !state.finished && !state.paused && !state.speaking && !recognizer) {
+  if (state.handsFree && !state.finished && !state.paused && !recognizer) {
     startListening();
   }
 }
@@ -1452,7 +937,6 @@ function addLearnerMessage(text) {
 function renderCoach(coach) {
   const box = $("coach");
   box.replaceChildren();
-  box.classList.remove("expanded");
   if (!coach.correction && !coach.tip && coach.understood) {
     box.hidden = true;
     return;
@@ -1477,41 +961,6 @@ function renderCoach(coach) {
   }
 }
 
-// Run handler on a tap without taking focus from the text box. A button would otherwise
-// blur it, and on phones that drops the keyboard and reflows the dock mid-tap. iOS decides
-// that at the touch level, so the tap is handled on touchend with its default prevented
-// (which also cancels the synthesized click). A touch that moved is a scroll (of the chip
-// row or the transcript) and a long press is text selection, so neither counts as a tap.
-// click covers mouse and keyboard activation, unless the button submits the form, whose
-// submit handler covers those instead. selectable keeps text selectable with the mouse.
-function onTap(el, handler, { click = true, selectable = false } = {}) {
-  let start = null;
-  if (!selectable) el.addEventListener("mousedown", (event) => event.preventDefault());
-  el.addEventListener("touchstart", (event) => {
-    const t = event.touches[0];
-    start = { x: t.clientX, y: t.clientY, at: Date.now() };
-  }, { passive: true });
-  el.addEventListener("touchend", (event) => {
-    const t = event.changedTouches[0];
-    const tap = start && Math.hypot(t.clientX - start.x, t.clientY - start.y) <= 10 && Date.now() - start.at < 500;
-    start = null;
-    if (!tap) return;
-    event.preventDefault();
-    handler();
-  });
-  if (click) el.addEventListener("click", handler);
-}
-
-// Put a suggestion into the text box, ready to edit or send, with the caret at the end.
-// The keyboard is only kept up if it already was: a suggestion never pops it open.
-function useSuggestion(text) {
-  const input = $("text");
-  input.value = text;
-  if (!document.body.classList.contains("typing")) return;
-  input.focus();
-  try { input.setSelectionRange(text.length, text.length); } catch { /* unsupported */ }
-}
-
 function renderSuggestions(suggestions) {
   const box = $("suggestions");
   box.replaceChildren();
@@ -1519,7 +968,10 @@ function renderSuggestions(suggestions) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.textContent = text;
-    onTap(chip, () => useSuggestion(text));
+    chip.addEventListener("click", () => {
+      $("text").value = text;
+      $("text").focus();
+    });
     box.append(chip);
   }
 }
@@ -1536,7 +988,7 @@ function renderFocusWords(words) {
   box.replaceChildren();
   const label = document.createElement("span");
   label.className = "focus-label";
-  label.textContent = state.settings?.vocab?.learnt ? "Your words: " : "Practising: ";
+  label.textContent = "Practising: ";
   box.append(label);
   for (const w of words) {
     const chip = document.createElement("span");
@@ -1570,35 +1022,17 @@ function setStatus(text) {
 
 function setBusy(busy) {
   state.busy = busy;
-  // Only the buttons are disabled while a reply loads, so a second turn can't be fired
-  // mid-reply. The text box stays enabled (and focused) so the keyboard — and the compact
-  // typing layout — don't collapse, and the learner can start composing their next turn.
-  // It's only locked once the scene is finished or the call is on hold.
-  for (const el of $("composer").querySelectorAll("button")) el.disabled = busy || state.finished || state.paused;
-  $("text").disabled = state.finished || state.paused;
+  for (const el of $("composer").querySelectorAll("button, input")) el.disabled = busy || state.finished || state.paused;
   updateCallState();
 }
 
 // ---------- call screen ----------
-// Scroll to the end of the call, but never past the start of the latest reply: with the
-// keyboard up there's room for only a few lines, and the question being answered should
-// read from its first line rather than be pushed off the top by the coach below it.
 function scrollCallToBottom() {
   const box = $("call-scroll");
-  requestAnimationFrame(() => {
-    let top = box.scrollHeight - box.clientHeight;
-    const reply = [...$("transcript").querySelectorAll(".msg.character")].at(-1);
-    if (reply) {
-      top = Math.min(top, reply.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - 8);
-    }
-    box.scrollTo({ top, behavior: "smooth" });
-  });
+  requestAnimationFrame(() => box.scrollTo({ top: box.scrollHeight, behavior: "smooth" }));
 }
 
-let voiceEndedAt = 0;
 function setSpeaking(on) {
-  if (on !== state.speaking) debugLog(on ? "voice playing" : "voice ended");
-  if (state.speaking && !on) voiceEndedAt = Date.now();
   state.speaking = on;
   updateCallState();
 }
@@ -1608,11 +1042,10 @@ function updateCallState() {
   let key = "idle";
   let text = state.handsFree ? "Your turn — just talk" : "Your turn";
   if (state.finished) { key = "ended"; text = "Scene complete"; }
-  else if (state.paused) { key = "paused"; text = wakeRecognizer ? "Paused — say “zurück”" : "Paused"; }
+  else if (state.paused) { key = "paused"; text = "Paused"; }
   else if (state.busy) { key = "thinking"; text = "Thinking…"; }
   else if (state.speaking) { key = "speaking"; text = "Speaking…"; }
   else if (recognizer) { key = "listening"; text = "Listening…"; }
-  else if (state.drill) { key = "drill"; text = "Say it again"; }
   $("conversation").dataset.state = key;
   $("call-state").textContent = text;
 }
@@ -1648,38 +1081,27 @@ function startCallTimer() {
 }
 
 // Pause = put the call on hold: stop the voice and the mic, freeze the timer.
-// Paused by voice ("zwei Minuten"), the mic keeps listening only for the resume word.
 let pendingReply = null; // a reply that arrived while paused, spoken on resume
 let resumeHandsFree = false;
-let pausedByVoice = false;
-function setPaused(paused, { byVoice = false } = {}) {
+function setPaused(paused) {
   if (paused === state.paused) return;
   if (paused) {
     resumeHandsFree = state.handsFree;
-    pausedByVoice = byVoice && Boolean(Recognition);
     state.paused = true; // set first so nothing restarts the mic or voice
     if (recognizer) stopListening();
     state.handsFree = false;
     stopSpeaking();
     holdCallTimer();
-    setStatus(pausedByVoice
-      ? "Call paused. Say “zurück” or “back” when you're ready, or tap Resume."
-      : "Call paused. Tap Resume to carry on.");
-    if (pausedByVoice) startWakeListener();
+    setStatus("Call paused. Tap Resume to carry on.");
   } else {
     state.paused = false;
-    pausedByVoice = false;
     runCallTimer();
     setStatus("");
     state.handsFree = resumeHandsFree;
     const reply = pendingReply;
     pendingReply = null;
-    // The browser allows one recognizer at a time: let the resume listener stop first.
-    stopWakeListener().then(() => {
-      if (state.paused) return;
-      if (reply) speak(reply.text, reply.spans, () => maybeResumeListening(), reply.mood);
-      else maybeResumeListening();
-    });
+    if (reply) speak(reply.text, reply.spans, () => maybeResumeListening());
+    else maybeResumeListening();
   }
   const btn = $("pause");
   btn.setAttribute("aria-pressed", String(paused));
@@ -1694,10 +1116,9 @@ function enterCall() {
   const mode = MODES[request.mode] ?? MODES.scene;
   $("call-avatar").textContent = characterName.split(" ").at(-1).charAt(0); // "Dr. Weber" -> W
   $("call-name").textContent = characterName;
-  const tense = TENSES[request.tense];
-  $("call-mode").textContent = (mode.usesScene
+  $("call-mode").textContent = mode.usesScene
     ? `${$("scenario").selectedOptions[0].textContent.split(" — ")[0]} · ${request.language}`
-    : `${mode.label.split(" — ")[0]} · ${request.language}`) + (tense ? ` · ${tense.short}` : "");
+    : `${mode.label.split(" — ")[0]} · ${request.language}`;
   document.body.classList.add("in-call");
   $("conversation").hidden = false;
   startCallTimer();
@@ -1711,20 +1132,10 @@ function leaveCall() {
   $("conversation").hidden = true;
 }
 
-// Keep the call screen pinned to the visible area when the phone keyboard opens.
-// The keyboard shrinks the visual viewport and (on iOS) scrolls it, but a position:fixed
-// layer stays anchored to the full layout viewport — so without this the dock is left
-// stranded at the top with a gap above the keyboard. Size the call to the visible height
-// and shift it down by the viewport's scroll offset so it lines up with what's on screen.
+// Keep the call screen sized to the visible area when the phone keyboard opens.
 if (window.visualViewport) {
-  const vv = window.visualViewport;
-  const fit = () => {
-    const root = document.documentElement.style;
-    root.setProperty("--vvh", `${vv.height}px`);
-    root.setProperty("--vvtop", `${vv.offsetTop}px`);
-  };
-  vv.addEventListener("resize", fit);
-  vv.addEventListener("scroll", fit);
+  const fit = () => document.documentElement.style.setProperty("--vvh", `${window.visualViewport.height}px`);
+  window.visualViewport.addEventListener("resize", fit);
   fit();
 }
 
@@ -1736,139 +1147,31 @@ async function sendTurn(message) {
   setStatus(`${state.settings.characterName} is thinking…`);
   const slowHint = setTimeout(() => setStatus("Still thinking… longer replies take a moment."), 6000);
   try {
-    const { turn, userText } = await chatTurn(state.settings, state.history, message);
+    const { turn, userText } = await geminiTurn(state.settings, state.history, message);
     state.history.push({ role: "user", content: message || userText });
     state.history.push({ role: "assistant", content: turn.reply });
 
     state.rapport = Math.max(0, state.rapport + Math.max(-2, Math.min(2, turn.rapport_delta)));
+    addCharacterMessage(turn);
+    if (message) renderCoach(turn.coach);
+    renderSuggestions(turn.suggestions);
+    renderFocusWords(turn.focusWords);
     renderStats();
-    if (message) {
-      renderCoach(turn.coach);
-      if (turn.coach?.correction) {
-        const types = (turn.coach.mistakes ?? []).filter((t) => MISTAKE_TYPES[t]);
-        recordMistakes(state.settings.request.language, types.length ? [...new Set(types)] : ["other"], message, turn.coach.correction);
-        renderMistakes();
-      }
+
+    if (turn.conversation_finished) {
+      state.finished = true;
+      renderSuggestions([]);
+      state.handsFree = false;
+      setStatus("Scene complete! Tap End to start another.");
+    } else if (!state.paused) {
+      setStatus("");
     }
-    if (!state.paused) setStatus("");
-    // After a correction the reply waits until the learner has said the fix.
-    if (message && state.settings.sayAgain && drillable(turn.coach?.correction, message)) startDrill(turn, message);
-    else presentReply(turn);
   } catch (error) {
     setStatus(error.message);
   } finally {
     clearTimeout(slowHint);
     setBusy(false);
   }
-}
-
-// The character's reply, its suggestions and focus words, and the end of a finished scene.
-function presentReply(turn) {
-  addCharacterMessage(turn);
-  renderSuggestions(turn.suggestions);
-  renderFocusWords(turn.focusWords);
-  if (turn.conversation_finished) {
-    state.finished = true;
-    renderSuggestions([]);
-    state.handsFree = false;
-    setStatus("Scene complete! Tap End to start another.");
-    setBusy(false);
-  }
-}
-
-// ---------- say it again ----------
-// After a correction the conversation waits: the learner says the corrected sentence (speech
-// recognition checks it), or skips, before the reply comes. Reading a correction is passive;
-// saying it is what makes it stick.
-const drillWords = (text) => normalizeSpeech(text.replace(/ß/g, "ss")).split(" ").filter(Boolean);
-
-function editDistance(a, b, same = (x, y) => x === y) {
-  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
-  for (let i = 1; i <= a.length; i++) {
-    const row = [i];
-    for (let j = 1; j <= b.length; j++) {
-      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (same(a[i - 1], b[j - 1]) ? 0 : 1));
-    }
-    prev = row;
-  }
-  return prev[b.length];
-}
-
-// Speech recognition mishears a little, so long words may be one letter off.
-const sameWord = (x, y) => x === y || (Math.min(x.length, y.length) >= 6 && editDistance([...x], [...y]) <= 1);
-const similarity = (a, b, same = sameWord) => 1 - editDistance(a, b, same) / Math.max(a.length, b.length, 1);
-
-// Worth drilling: a real change from what was said, short enough to say in one go.
-function drillable(correction, said) {
-  const fix = drillWords(correction ?? "");
-  return fix.length > 0 && fix.length <= 30 && fix.join(" ") !== drillWords(said).join(" ");
-}
-
-// Did the attempt say the corrected sentence? It must contain, exactly, every word the
-// correction changed, be close to the correction (most words, in order; this also catches
-// word-order fixes), and be closer to it than to the original mistake word for word (no
-// allowance for mishearing there, or "Brüder" would count as the "Bruder" it corrects).
-function drillMatch(attempt, target, said) {
-  const a = drillWords(attempt);
-  const t = drillWords(target);
-  const s = drillWords(said);
-  const pool = new Map();
-  for (const w of s) pool.set(w, (pool.get(w) ?? 0) + 1);
-  const changed = t.filter((w) => {
-    const n = pool.get(w) ?? 0;
-    pool.set(w, n - 1);
-    return n <= 0;
-  });
-  const missing = [...new Set(changed.filter((w) => !a.includes(w)))];
-  const close = similarity(a, t);
-  return { ok: !missing.length && close >= 0.75 && close > similarity(a, s, (x, y) => x === y), missing };
-}
-
-function startDrill(turn, said) {
-  state.drill = { target: turn.coach.correction.trim(), said, turn };
-  renderSuggestions([]);
-  $("drill-target").textContent = state.drill.target;
-  $("drill-target").lang = state.settings.locale;
-  setDrillFeedback("");
-  $("drill").hidden = false;
-  updateCallState();
-  scrollCallToBottom();
-  // Hear it first; hands-free then listens for the attempt.
-  speak(state.drill.target, [], () => maybeResumeListening());
-}
-
-function setDrillFeedback(text, ok = false) {
-  $("drill-feedback").textContent = text;
-  $("drill-feedback").classList.toggle("ok", ok);
-}
-
-// Returns whether the attempt passed.
-function checkDrill(attempt) {
-  const d = state.drill;
-  const { ok, missing } = drillMatch(attempt, d.target, d.said);
-  if (ok) {
-    setDrillFeedback(`✓ That's it: “${attempt}”`, true);
-    setTimeout(() => { if (state.drill === d) endDrill(); }, 1000);
-  } else {
-    setDrillFeedback(`Heard “${attempt}”. ${missing.length ? `Listen for: ${missing.join(", ")}. ` : ""}Try again.`);
-  }
-  return ok;
-}
-
-function endDrill() {
-  const d = state.drill;
-  if (!d) return;
-  state.drill = null;
-  $("drill").hidden = true;
-  if (recognizer) { dropNextResult = true; recognizer.abort(); }
-  stopSpeaking();
-  updateCallState();
-  presentReply(d.turn);
-}
-
-function isSkipCommand(text) {
-  const t = normalizeSpeech(text);
-  return t.split(" ").length <= 3 && /(?<!\p{L})(weiter|überspringen|skip|next)(?!\p{L})/u.test(t);
 }
 
 // ---------- word explorer & bookmarks ----------
@@ -1878,7 +1181,7 @@ async function openExplorer(word, sentence) {
   panel.hidden = false;
   body.textContent = `Looking up “${word}”…`;
   try {
-    const info = await wordInfo({
+    const info = await geminiWord({
       word,
       sentence,
       language: state.settings.request.language,
@@ -1895,11 +1198,10 @@ async function openExplorer(word, sentence) {
     actions.className = "tools";
     const listen = document.createElement("button");
     listen.textContent = "▶ Listen";
-    onTap(listen, () => speak(info.word, []));
+    listen.addEventListener("click", () => speak(info.word, []));
     const save = document.createElement("button");
     save.textContent = "★ Save word";
-    onTap(save, () => {
-      if (save.disabled) return; // touch events can still reach a disabled button
+    save.addEventListener("click", () => {
       saveBookmark(info);
       save.textContent = "Saved";
       save.disabled = true;
@@ -1910,55 +1212,6 @@ async function openExplorer(word, sentence) {
     body.textContent = error.message;
   }
 }
-
-// The mistake tracker for the language picked on the setup screen.
-function renderMistakes() {
-  const language = $("language").value;
-  const ranked = rankedMistakes(language);
-  const practised = new Set(recurringMistakes(language).map((t) => t.type));
-  const list = $("mistakes");
-  list.replaceChildren();
-  $("reset-mistakes").hidden = !ranked.length;
-  $("mistakes-sync").textContent = trainerLink()
-    ? "Kept in your Vocab Trainer too, so it follows you to your other devices."
-    : "Kept on this device only. Connect your Vocab Trainer above to have it on all your devices.";
-  if (!ranked.length) {
-    const li = document.createElement("li");
-    li.className = "muted";
-    li.textContent = `Corrections are sorted here by kind of mistake. The ones you make again and again get practised on purpose in your ${language} conversations.`;
-    list.append(li);
-    return;
-  }
-  const clip = (t) => (t.length > 90 ? `${t.slice(0, 87)}…` : t);
-  for (const t of ranked) {
-    const li = document.createElement("li");
-    const name = MISTAKE_TYPES[t.type];
-    li.append(`${name[0].toUpperCase()}${name.slice(1)} — ${t.count}×`);
-    if (practised.has(t.type)) {
-      const tag = document.createElement("span");
-      tag.className = "mistake-focus";
-      tag.textContent = "being practised";
-      li.append(" ", tag);
-    }
-    const example = document.createElement("div");
-    example.className = "muted mistake-example";
-    example.textContent = `“${clip(t.example.said)}” → “${clip(t.example.fix)}”`;
-    li.append(example);
-    list.append(li);
-  }
-}
-
-$("reset-mistakes").addEventListener("click", () => {
-  const language = $("language").value;
-  if (!confirm(`Forget your recorded ${language} mistakes?`)) return;
-  const log = store.get("mistakes", {});
-  delete log[language];
-  store.set("mistakes", log);
-  // Remembered, so the linked trainer clears it on the other devices too.
-  store.set("mistake_resets", { ...store.get("mistake_resets", {}), [language]: Date.now() });
-  renderMistakes();
-  syncMistakes();
-});
 
 function saveBookmark(info) {
   const bookmarks = store.get("bookmarks", []);
@@ -1993,58 +1246,30 @@ function renderBookmarks() {
 
 // ---------- wiring ----------
 
-const KEY_INPUTS = { mistral: "mistral-key", groq: "groq-key", gemini: "api-key" };
-
-// Show only the key fields the chosen AI needs; saved keys show as a placeholder.
-function showKeyFields() {
-  const provider = $("provider").value;
-  for (const el of document.querySelectorAll("#keygate [data-provider]")) {
-    el.hidden = el.dataset.provider !== provider;
-  }
-  $("gemini-optional").hidden = provider === "gemini";
-  for (const [service, id] of Object.entries(KEY_INPUTS)) {
-    $(id).placeholder = getKey(service) ? "Saved — leave blank to keep" : $(id).dataset.placeholder;
-  }
-}
-for (const id of Object.values(KEY_INPUTS)) $(id).dataset.placeholder = $(id).placeholder;
-$("provider").addEventListener("change", showKeyFields);
-
-function keySummary() {
-  if (getProvider() === "gemini") return "✓ Using Google Gemini.";
-  return getKey("groq") ? "✓ Using Mistral, with Groq as backup." : "✓ Using Mistral.";
-}
-
-// Show the key box or the setup, depending on whether the chosen AI has a key saved.
+// Show the key box or the setup, depending on whether a key is already saved.
 function refreshKeyGate() {
-  const haveKey = Boolean(getKey(getProvider()));
+  const haveKey = Boolean(getKey());
   $("keygate").hidden = haveKey;
   $("setup").hidden = !haveKey;
-  $("key-saved").hidden = !haveKey;
-  $("key-summary").textContent = keySummary();
-  $("provider").value = getProvider();
-  showKeyFields();
+  if (haveKey) $("key-saved").hidden = false;
 }
 
 $("save-key").addEventListener("click", () => {
-  const provider = $("provider").value;
-  const typed = Object.fromEntries(Object.entries(KEY_INPUTS).map(([service, id]) => [service, $(id).value.trim()]));
-  if (!typed[provider] && !getKey(provider)) {
-    $("key-status").textContent = `Paste your ${provider === "mistral" ? "Mistral" : "Gemini"} API key first.`;
+  const value = $("api-key").value.trim();
+  if (!value) {
+    $("key-status").textContent = "Paste your Gemini API key first.";
     return;
   }
-  for (const [service, value] of Object.entries(typed)) {
-    if (value) setKey(service, value);
-    $(KEY_INPUTS[service]).value = "";
-  }
-  setProvider(provider);
+  setKey(value);
+  $("api-key").value = "";
   $("key-status").textContent = "";
   refreshKeyGate();
 });
 
 $("change-key").addEventListener("click", () => {
-  $("keygate").hidden = false;
-  $("setup").hidden = true;
-  showKeyFields();
+  setKey("");
+  $("key-saved").hidden = true;
+  refreshKeyGate();
 });
 
 $("start").addEventListener("click", async () => {
@@ -2053,17 +1278,12 @@ $("start").addEventListener("click", async () => {
   const mode = $("mode").value;
   const usesScene = (MODES[mode] ?? MODES.scene).usesScene;
   const useVocab = $("use-vocab").checked && !$("use-vocab").disabled;
-  // Vocab of the chosen level and the ones below it (the list only goes up to B1).
-  const VOCAB_LEVELS = ["A1", "A2", "B1"];
-  const upTo = VOCAB_LEVELS.indexOf($("level").value);
-  const levels = upTo === -1 ? VOCAB_LEVELS : VOCAB_LEVELS.slice(0, upTo + 1);
+  const levels = ["A1", "A2", "B1"].filter((l) => $(`vlev-${l}`)?.checked);
 
   let vocab = { enabled: false };
   if (useVocab) {
-    // Linked to the trainer: A1/A2 in full plus its learnt B1 words (fetched on page load, so Start never waits).
-    const learnt = trainerLink() ? ((await idbGet("learnt_words").catch(() => null)) ?? []) : null;
-    const loaded = await loadVocabForSession(levels, learnt);
-    vocab = { enabled: loaded > 0, levels, learnt: Boolean(learnt) };
+    const loaded = await loadVocabForSession(levels.length ? levels : ["A1", "A2", "B1"]);
+    vocab = { enabled: loaded > 0, levels };
   }
 
   state.settings = {
@@ -2071,22 +1291,20 @@ $("start").addEventListener("click", async () => {
     level: $("level").value,
     characterName: usesScene ? (SCENARIOS[scenario] ?? SCENARIOS.cafe).character : PARTNER.character,
     vocab,
-    sayAgain: $("say-again").checked,
     request: {
       language: languageSelect.value,
       nativeLanguage: $("native").value,
       level: $("level").value,
       scenario,
       mode,
-      tense: $("tense").value,
     },
   };
   bumpStreak();
   renderStats();
   $("setup").hidden = true;
   enterCall();
-  // The on-device voice is the default: get it ready while the first reply loads.
-  if (hasPiperVoice(state.settings.locale)) {
+  // Gemini voice is used up for today: get the on-device voice ready while the first reply loads.
+  if (geminiTtsBlocked() && hasPiperVoice(state.settings.locale)) {
     preloadPiper(state.settings.locale).catch((error) => console.warn("Piper download failed:", error));
   }
   sendTurn("");
@@ -2122,68 +1340,11 @@ async function loadVocabUrl(url, { silent } = {}) {
 
 $("load-url").addEventListener("click", () => loadVocabUrl($("vocab-url").value.trim()));
 
-// Fetch the learnt words now and keep them, so they are ready when a conversation starts.
-async function refreshLearntWords() {
-  if (!trainerLink()) return renderTrainerLink(null);
-  $("trainer-status").textContent = "🔗 Linked to your Vocab Trainer · fetching your learnt words…";
-  try {
-    const words = await fetchLearntWords();
-    await idbSet("learnt_words", words);
-    renderTrainerLink(higherCount(words));
-  } catch (error) {
-    const kept = trainerLink() ? higherCount((await idbGet("learnt_words").catch(() => null)) ?? []) : null;
-    renderTrainerLink(kept, error.message);
-  }
-}
-
-function higherCount(words) {
-  return words.filter((w) => !KNOWN_LEVELS.includes(w.level)).length;
-}
-
-// count: learnt B1 words ready (null when not linked).
-function renderTrainerLink(count, problem = "") {
-  const linked = Boolean(trainerLink());
-  $("trainer-unlink").hidden = !linked;
-  $("trainer-form").hidden = linked;
-  const text = !linked
-    ? "Connect your Vocab Trainer so B1 uses only the words you have learnt there:"
-    : `🔗 Linked to your Vocab Trainer · your partner uses all A1 and A2 words plus ${
-        count ? `the ${count} B1 words you have learnt there` : "your learnt B1 words (none yet)"}.`;
-  $("trainer-status").textContent = problem ? `${problem} ${linked ? text : ""}`.trim() : text;
-}
-
-$("trainer-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const email = $("trainer-email").value.trim();
-  const password = $("trainer-password").value;
-  $("trainer-connect").disabled = true;
-  // The free server sleeps when unused and can take a minute to wake up.
-  $("trainer-status").textContent = "Connecting… (the Vocab Trainer can take up to a minute to wake up)";
-  try {
-    await connectTrainer(email, password);
-    $("trainer-password").value = "";
-    await refreshLearntWords();
-    syncMistakes();
-    renderMistakes();
-  } catch (error) {
-    renderTrainerLink(null, error.message === "Failed to fetch" ? "Couldn't reach the Vocab Trainer." : error.message);
-  } finally {
-    $("trainer-connect").disabled = false;
-  }
-});
-
-$("trainer-unlink").addEventListener("click", async () => {
-  store.set("trainer_link", null);
-  await idbSet("learnt_words", []).catch(() => {});
-  renderTrainerLink(null);
-  renderMistakes();
-  refreshVocabUI((await vocabMeta().catch(() => ({ count: 0 }))).count);
-});
-
 function refreshVocabUI(count) {
   const useVocab = $("use-vocab");
   const have = count > 0;
   useVocab.disabled = !have;
+  $("vocab-levels").style.opacity = have ? "1" : "0.5";
   if (have && !$("vocab-status").textContent) {
     $("vocab-status").textContent = `✓ ${count} words ready.`;
   }
@@ -2196,62 +1357,14 @@ $("mode").addEventListener("change", () => {
   $("scenario").closest("label").style.opacity = usesScene ? "1" : "0.5";
 });
 
-$("language").addEventListener("change", preloadSelectedVoice);
-$("language").addEventListener("change", renderMistakes);
-$("say-again").checked = store.get("say_again", true);
-$("say-again").addEventListener("change", () => store.set("say_again", $("say-again").checked));
-
-function submitComposer() {
-  // A reply is still loading (or the call is finished/on hold): keep what's typed.
-  if (state.busy || state.finished || state.paused) return;
+$("composer").addEventListener("submit", (event) => {
+  event.preventDefault();
   const text = $("text").value.trim();
   if (!text) return;
   $("text").value = "";
-  if (state.drill) {
-    checkDrill(text); // typing the corrected sentence also counts
-    return;
-  }
-  if (isPauseCommand(text)) {
-    setPaused(true);
-    return;
-  }
   stopSpeaking();
   sendTurn(text);
-}
-
-// Submitting via Enter or the native button click (desktop).
-$("composer").addEventListener("submit", (event) => {
-  event.preventDefault();
-  submitComposer();
 });
-
-// On phones the on-screen keyboard covers half the screen, so while the text box is
-// focused mark the body "typing": the CSS then folds away the big round call controls
-// and the vocab row, leaving the input and transcript usable. Keep the latest message
-// in view above the keyboard. The layout only goes back once the box has stayed blurred
-// for a moment, so a brief blur during a tap can't reflow the dock and move the Send
-// button out from under the finger.
-let typingTimer = null;
-$("text").addEventListener("focus", () => {
-  clearTimeout(typingTimer);
-  document.body.classList.add("typing");
-  scrollCallToBottom();
-});
-$("text").addEventListener("blur", () => {
-  clearTimeout(typingTimer);
-  typingTimer = setTimeout(() => {
-    if (document.activeElement !== $("text")) document.body.classList.remove("typing");
-  }, 300);
-});
-
-// Send without dropping the keyboard (see onTap), so you can type the next turn straight
-// away. If the browser blurred the box anyway, focusing it again inside the tap keeps
-// the keyboard up. Mouse clicks and Enter go through the form's submit handler.
-onTap($("composer").querySelector("button[type='submit']"), () => {
-  const keepKeyboard = document.body.classList.contains("typing");
-  submitComposer();
-  if (keepKeyboard) $("text").focus();
-}, { click: false });
 
 $("mic").addEventListener("click", () => {
   if (state.handsFree || $("mic").getAttribute("aria-pressed") === "true") {
@@ -2264,49 +1377,7 @@ $("mic").addEventListener("click", () => {
 
 $("pause").addEventListener("click", () => setPaused(!state.paused));
 
-// While typing on a phone the coach shows only its first two lines (CSS); tap it for the rest.
-onTap($("coach"), () => {
-  $("coach").classList.toggle("expanded");
-  $("coach").scrollIntoView({ block: "nearest", behavior: "smooth" });
-}, { selectable: true });
-
-// Say-it-again panel: speak the correction (or type it), hear it again, or move on.
-onTap($("drill-say"), () => {
-  if (!state.drill || recognizer) return;
-  $("text").blur(); // speaking, not typing: let the keyboard go
-  setDrillFeedback("");
-  startListening();
-});
-onTap($("drill-hear"), () => {
-  if (!state.drill) return;
-  if (recognizer) { dropNextResult = true; recognizer.abort(); }
-  speak(state.drill.target, [], () => maybeResumeListening());
-});
-onTap($("drill-skip"), () => endDrill());
-
-// Before what was heard is sent (it goes after the pause): fix it in the text box, or drop it
-// and say it again.
-onTap($("heard-edit"), () => {
-  if (!recognizer) return;
-  const text = $("live").textContent;
-  dropNextResult = true; // the text box has it now: stop the mic without sending
-  recognizer.abort();
-  showHeard("");
-  // Focused inside the tap, so the phone keyboard opens.
-  const input = $("text");
-  input.value = text;
-  input.focus();
-  try { input.setSelectionRange(text.length, text.length); } catch { /* unsupported */ }
-  setStatus("Fix it, then tap Send.");
-});
-onTap($("heard-delete"), () => {
-  if (!recognizer) return;
-  redoNextResult = true;
-  recognizer.abort();
-  showHeard("");
-});
-
-onTap($("explorer-close"), () => {
+$("explorer-close").addEventListener("click", () => {
   $("explorer").hidden = true;
 });
 
@@ -2315,8 +1386,6 @@ $("end").addEventListener("click", () => {
   stopListening();
   stopSpeaking();
   state.history = [];
-  state.drill = null;
-  $("drill").hidden = true;
   state.rapport = 0;
   state.finished = false;
   state.handsFree = false;
@@ -2326,7 +1395,7 @@ $("end").addEventListener("click", () => {
   $("transcript").replaceChildren();
   $("coach").hidden = true;
   $("suggestions").replaceChildren();
-  showHeard("");
+  $("live").textContent = "";
   $("text").value = "";
   setStatus("");
   renderStats();
@@ -2334,7 +1403,6 @@ $("end").addEventListener("click", () => {
   setBusy(false);
   leaveCall();
   $("setup").hidden = false;
-  syncMistakes(); // the call is over: send its mistakes
 });
 
 // Voices load asynchronously in Chrome.
@@ -2343,23 +1411,10 @@ if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => {};
 refreshKeyGate();
 renderStats();
 renderBookmarks();
-renderMistakes();
-// Get the voice ready while the learner picks their settings, so the first reply doesn't wait.
-preloadSelectedVoice();
 // Show any already-imported vocab; if none, fetch the default URL in the background.
-// Then the learnt words from the Vocab Trainer, if linked (or just linked via the URL).
-takeTrainerLinkFromUrl();
 vocabMeta()
   .then((m) => {
     refreshVocabUI(m.count);
     if (m.count === 0) loadVocabUrl(DEFAULT_VOCAB_URL, { silent: true });
   })
-  .catch(() => {})
-  .finally(() => {
-    refreshLearntWords();
-    syncMistakes();
-  });
-// Leaving the page (closing the tab, switching apps) sends what this device recorded.
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") syncMistakes({ keepalive: true });
-});
+  .catch(() => {});

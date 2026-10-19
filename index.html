@@ -7,8 +7,7 @@
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="favicon.svg" />
     <meta name="theme-color" content="#2f5fd0" />
-    <!-- ?v= makes phones fetch the new file after a change instead of a cached copy: bump it with each change. -->
-    <link rel="stylesheet" href="styles.css?v=8" />
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <header class="topbar">
@@ -20,41 +19,24 @@
     </header>
 
     <section id="keygate" class="card" hidden>
-      <h2>Connect an AI</h2>
+      <h2>Add your Gemini API key</h2>
       <p class="muted">
-        Talkloop runs entirely in your browser and talks to the AI you pick with your own free key.
-        Keys are stored only in this browser and are sent only to that service.
+        Talkloop runs entirely in your browser and talks to Google Gemini with your own key.
+        Get a free key at
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
+        Your key is stored only in this browser — it is never sent anywhere except Google.
       </p>
-      <label>Conversation AI
-        <select id="provider">
-          <option value="mistral">Mistral — best German</option>
-          <option value="gemini">Google Gemini</option>
-        </select>
-      </label>
-      <label data-provider="mistral">Mistral API key
-        <input id="mistral-key" type="password" autocomplete="off" placeholder="Paste your Mistral key" />
-        <span class="muted">Free at
-          <a href="https://console.mistral.ai/api-keys" target="_blank" rel="noopener">console.mistral.ai</a>
-          (pick the free Experiment plan).</span>
-      </label>
-      <label data-provider="mistral">Groq API key <span class="muted">(optional — used when Mistral is busy)</span>
-        <input id="groq-key" type="password" autocomplete="off" placeholder="Paste your Groq key (gsk_…)" />
-        <span class="muted">Free at
-          <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com</a>.</span>
-      </label>
-      <label>Gemini API key <span id="gemini-optional" class="muted">(optional — backup voice)</span>
+      <label>Gemini API key
         <input id="api-key" type="password" autocomplete="off" placeholder="Paste your key (AIza… or AQ.…)" />
-        <span class="muted">Free at
-          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</span>
       </label>
-      <button id="save-key" class="primary">Save</button>
+      <button id="save-key" class="primary">Save key</button>
       <p id="key-status" class="status"></p>
     </section>
 
     <section id="setup" class="card" hidden>
       <div id="key-saved" class="keyline" hidden>
-        <span id="key-summary" class="muted"></span>
-        <button id="change-key" type="button">Change</button>
+        <span class="muted">✓ Gemini key saved in this browser.</span>
+        <button id="change-key" type="button">Change key</button>
       </div>
       <h2>Start a conversation</h2>
       <div class="grid">
@@ -78,11 +60,9 @@
         </label>
         <label>Level
           <select id="level">
-            <option value="A1">A1</option>
-            <option value="A2">A2</option>
-            <option value="B1">B1</option>
-            <option value="B2">B2</option>
-            <option value="C1">C1</option>
+            <option value="beginner">Beginner</option>
+            <option value="intermediate">Intermediate</option>
+            <option value="advanced">Advanced</option>
           </select>
         </label>
         <label>Mode
@@ -91,15 +71,6 @@
             <option value="interview">Interview me</option>
             <option value="topic">Discuss a topic</option>
             <option value="scene">Scene role-play</option>
-          </select>
-        </label>
-        <label>Tense to practise
-          <select id="tense">
-            <option value="any">Any tense — just talk</option>
-            <option value="present">Present (Präsens) — ich spiele</option>
-            <option value="perfekt">Past, spoken (Perfekt) — ich habe gespielt</option>
-            <option value="praeteritum">Past, written (Präteritum) — ich spielte</option>
-            <option value="future">Future (Futur I) — ich werde spielen</option>
           </select>
         </label>
         <label>Scene
@@ -125,7 +96,6 @@
           </select>
         </label>
       </div>
-      <p id="voice-status" class="muted voice-status" aria-live="polite"></p>
 
       <div class="vocab">
         <div class="vocab-head">
@@ -134,15 +104,6 @@
             <input id="vocab-file" type="file" accept="application/json,.json" hidden />
           </label>
         </div>
-        <div class="trainer-link">
-          <p id="trainer-status" class="muted" aria-live="polite"></p>
-          <button type="button" id="trainer-unlink" hidden>Unlink</button>
-        </div>
-        <form id="trainer-form" class="trainer-form" hidden>
-          <input id="trainer-email" type="email" autocomplete="username" placeholder="Vocab Trainer email" required />
-          <input id="trainer-password" type="password" autocomplete="current-password" placeholder="Password" required />
-          <button type="submit" id="trainer-connect">Connect</button>
-        </form>
         <div class="vocab-url-row">
           <input id="vocab-url" type="url"
                  value="https://harsimar17.github.io/Deutsch-Vocab-Helper/german_vocab.json"
@@ -152,14 +113,15 @@
         <p id="vocab-status" class="muted"></p>
         <label class="check">
           <input id="use-vocab" type="checkbox" disabled checked />
-          Weave my vocab into the conversation (words up to your level)
+          Weave my vocab into the conversation
         </label>
+        <div id="vocab-levels" class="vocab-levels">
+          <span class="muted">Levels:</span>
+          <label class="check"><input id="vlev-A1" type="checkbox" checked /> A1</label>
+          <label class="check"><input id="vlev-A2" type="checkbox" checked /> A2</label>
+          <label class="check"><input id="vlev-B1" type="checkbox" checked /> B1</label>
+        </div>
       </div>
-
-      <label class="check say-again">
-        <input id="say-again" type="checkbox" checked />
-        After a correction, say the corrected sentence before the conversation moves on
-      </label>
 
       <button id="start" class="primary">Start</button>
     </section>
@@ -183,26 +145,8 @@
 
       <footer class="call-dock">
         <div id="focus" class="focus" hidden aria-label="Vocabulary being practised"></div>
-        <!-- Say it again: after a correction, the corrected sentence is said before the reply comes. -->
-        <div id="drill" class="drill" hidden aria-live="polite">
-          <p class="drill-label">Say it correctly:</p>
-          <p id="drill-target" class="drill-target"></p>
-          <p id="drill-feedback" class="drill-feedback"></p>
-          <div class="drill-actions">
-            <button type="button" id="drill-say" class="primary">🎤 Say it</button>
-            <button type="button" id="drill-hear">▶ Hear it</button>
-            <button type="button" id="drill-skip">Skip</button>
-          </div>
-        </div>
         <div id="suggestions" class="chips" aria-label="Things you could say"></div>
-        <!-- What the mic has heard; until it is sent (after the pause) it can be fixed or dropped. -->
-        <div id="heard" class="heard" hidden>
-          <div id="live" class="live" aria-live="polite"></div>
-          <div class="heard-actions">
-            <button type="button" id="heard-edit">✎ Edit</button>
-            <button type="button" id="heard-delete">✕ Delete</button>
-          </div>
-        </div>
+        <div id="live" class="live" aria-live="polite"></div>
         <p id="status" class="status"></p>
         <form id="composer" class="composer">
           <input id="text" autocomplete="off" placeholder="Type your reply…" />
@@ -231,19 +175,10 @@
     </aside>
 
     <section class="card">
-      <div class="card-head">
-        <h2>Your recurring mistakes</h2>
-        <button type="button" id="reset-mistakes" hidden>Reset</button>
-      </div>
-      <ul id="mistakes" class="bookmarks"></ul>
-      <p id="mistakes-sync" class="muted mistakes-sync"></p>
-    </section>
-
-    <section class="card">
       <h2>Saved words</h2>
       <ul id="bookmarks" class="bookmarks"></ul>
     </section>
 
-    <script src="app.js?v=19" type="module"></script> <!-- bump with app.js changes, like styles.css above -->
+    <script src="app.js" type="module"></script>
   </body>
 </html>
