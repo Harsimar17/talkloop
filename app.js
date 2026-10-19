@@ -399,24 +399,37 @@ async function loadVocabForSession(levels, learnt = null) {
     vocabPools = [shuffled(all)];
   }
   vocabPools = vocabPools.filter((words) => words.length).map((words) => ({ words, pointer: 0 }));
+  vocabBatch = [];
   vocabSeen = new Set((await idbGet("vocab_seen")) ?? []);
   return vocabPools.reduce((sum, p) => sum + p.words.length, 0);
 }
 
-// Pick the next rotating batch of words to weave into the conversation, shared
-// evenly between the pools (the learnt B1 words first).
+// The words offered to the partner, oldest first. Only a few change each turn: a whole new
+// random set every turn made the partner jump from topic to topic to fit them in, while a
+// steady set lets it bring each word in once the talk gets there.
+let vocabBatch = [];
+const VOCAB_TURNOVER = 2; // words replaced per turn
+
+// The words for this turn: last turn's, minus the oldest few, topped up from the pools,
+// shared evenly between them (the learnt B1 words first).
 function nextVocabBatch(n = 12) {
-  const batch = [];
+  const batch = vocabBatch.slice(Math.min(VOCAB_TURNOVER, vocabBatch.length), n);
+  const fresh = [];
   vocabPools.forEach((pool, i) => {
-    const share = Math.min(pool.words.length, Math.ceil((n - batch.length) / (vocabPools.length - i)));
-    for (let k = 0; k < share; k++) {
-      batch.push(pool.words[pool.pointer % pool.words.length]);
+    const share = Math.ceil((n - batch.length - fresh.length) / (vocabPools.length - i));
+    // Skip words already offered (a small pool comes round again quickly).
+    for (let k = 0, tries = 0; k < share && tries < pool.words.length; tries++) {
+      const word = pool.words[pool.pointer % pool.words.length];
       pool.pointer++;
+      if (batch.includes(word) || fresh.includes(word)) continue;
+      fresh.push(word);
+      k++;
     }
   });
-  batch.forEach((w) => vocabSeen.add(w.de));
+  vocabBatch = [...batch, ...fresh];
+  fresh.forEach((w) => vocabSeen.add(w.de));
   idbSet("vocab_seen", [...vocabSeen]).catch(() => {});
-  return batch;
+  return vocabBatch;
 }
 
 // ---------- mistake tracker ----------
@@ -597,17 +610,23 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, ten
       "A message in another tense, or with this tense formed wrongly (wrong auxiliary, wrong participle or ending), always gets a coach.correction in this tense, even when it is otherwise correct German; never only a tip. When their message does use it correctly, say so briefly in coach.tip.",
     );
   }
+  // The conversation comes first: words are brought in only where they fit the topic, never
+  // by jumping to a new one (that made replies hop from work to politics in one line).
+  const stayOnTopic = "The conversation comes first: every reply follows on from what the learner just said and stays on the current topic. Use a word from this list only where it fits that topic naturally; never change the topic or ask an unrelated question to bring a word in. If none fit, use none: the list stays mostly the same over the next turns, so the chance will come. When the topic has run its course, you may move to a new one where some of the words fit, with a natural bridge from the old one.";
   if (targetWords.length && learnt) {
     const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
     lines.push(
       `The learner already knows these words but now needs to practise using them when speaking: ${list}.`,
-      "Otherwise speak as you normally would: you are not limited to these words. Use one or two of them naturally in your reply, and steer the conversation so the learner gets to use them too, for example with a question whose natural answer needs one of them. Never list or quiz the words.",
+      stayOnTopic,
+      "Otherwise speak as you normally would: you are not limited to these words. Where one fits, use it in your reply, or ask a question on the current topic whose natural answer needs it, so the learner gets to use it too. Never list or quiz the words.",
       "Only when the learner's message actually contains one of these words, check it: if it is right, say so briefly in coach.tip; if the meaning, article or form is wrong, give the fix in coach.correction.",
     );
   } else if (targetWords.length) {
     const list = targetWords.map((w) => (w.en ? `${w.de} (${w.en})` : w.de)).join("; ");
     lines.push(
-      `The learner is practising this vocabulary. Naturally weave two to four of these words or phrases into your reply where they fit — do not force all of them, keep it natural, and give the learner a chance to use them too: ${list}.`,
+      `The learner is practising this vocabulary: ${list}.`,
+      stayOnTopic,
+      "Where they fit, weave one to three of these words or phrases into your reply, keep it natural, and give the learner a chance to use them too.",
     );
   }
   if (weakSpots.length) {
@@ -615,7 +634,7 @@ function turnSystemPrompt({ language, nativeLanguage, level, scenario, mode, ten
     const list = weakSpots.map((m) => `${MISTAKE_TYPES[m.type]} (recently they said ${clip(m.example.said)}; correct: ${clip(m.example.fix)})`).join("; ");
     lines.push(
       `The learner keeps making these mistakes, most frequent first: ${list}.`,
-      "Deliberately set up chances to get them right: about every second question, ask something whose natural answer needs one of these structures, taking them in turn. Stay natural and in your role, never say that you are testing them, and don't explain grammar in your reply; the coach handles corrections.",
+      "Deliberately set up chances to get them right: about every second question, ask something on the current topic whose natural answer needs one of these structures, taking them in turn. Stay natural and in your role, never say that you are testing them, and don't explain grammar in your reply; the coach handles corrections.",
     );
   }
   return lines.join("\n");
