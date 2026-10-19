@@ -870,7 +870,7 @@ function debugLog(text) {
   }
   const lines = box.textContent ? box.textContent.split("\n") : [];
   lines.push(`${((Date.now() - debugStart) / 1000).toFixed(1)}s ${text}`);
-  box.textContent = lines.slice(-12).join("\n");
+  box.textContent = lines.slice(-20).join("\n");
 }
 
 // What the mic has heard so far, with Edit and Delete while it can still be changed.
@@ -917,7 +917,7 @@ function startListening() {
   };
   // Where a silent mic stops on a phone: no audiostart = the mic never opened; no soundstart =
   // it hears nothing.
-  if (DEBUG) for (const type of ["audiostart", "soundstart", "speechstart"]) rec.addEventListener(type, () => debugLog(type));
+  if (DEBUG) for (const type of ["audiostart", "soundstart", "speechstart", "speechend", "soundend", "audioend"]) rec.addEventListener(type, () => debugLog(type));
   rec.onend = () => {
     clearTimeout(silenceTimer);
     debugLog(`mic ended, heard "${heard.slice(0, 40)}"`);
@@ -1106,6 +1106,18 @@ const player = new Audio();
 player.setAttribute("playsinline", "");
 let playerPrimed = false;
 
+// Unload the player once a reply has finished or been stopped. On iPhone a player still
+// holding a clip keeps Safari set up for playback, and a mic opened then records silence
+// ("Listening…" with the mic on, but no words). It stays unlocked for the next reply.
+function releasePlayer() {
+  const src = player.getAttribute("src");
+  if (!src) return;
+  player.removeAttribute("src");
+  player.load();
+  if (src.startsWith("blob:")) URL.revokeObjectURL(src);
+  debugLog("player released");
+}
+
 // Runs inside every user gesture so Safari lets audio play later, after network waits.
 let speechPrimed = false;
 function unlockAudio() {
@@ -1289,6 +1301,7 @@ function playSpeech(pcm, sampleRate, wordSpans, onDone, onFail) {
     if (token !== speakToken) return;
     if (currentHighlight) { clearInterval(currentHighlight); currentHighlight = null; }
     audio.onended = audio.onerror = null;
+    releasePlayer();
     wordSpans.forEach((span) => span.classList.remove("speaking"));
     if (ok) onDone();
     else onFail(reason);
@@ -1343,6 +1356,7 @@ function stopSpeaking() {
     currentAudio.onended = currentAudio.onerror = null;
     currentAudio.pause();
     currentAudio = null;
+    releasePlayer();
   }
   // Only when the browser voice is in use: on iOS, cancelling the speech engine for
   // nothing still churns the audio session the reply is about to play through.
@@ -1410,8 +1424,16 @@ function addCharacterMessage(turn) {
   speak(turn.reply, spans, () => maybeResumeListening(), turn.mood);
 }
 
+// Hands-free listens again a moment after the voice has stopped: on iPhone a mic opened in
+// the same instant records silence while Safari is still switching from playing to recording.
+const MIC_AFTER_VOICE_MS = 700;
 function maybeResumeListening() {
-  if (state.handsFree && !state.finished && !state.paused && !recognizer) {
+  const wait = voiceEndedAt + MIC_AFTER_VOICE_MS - Date.now();
+  if (wait > 0) {
+    setTimeout(maybeResumeListening, wait);
+    return;
+  }
+  if (state.handsFree && !state.finished && !state.paused && !state.speaking && !recognizer) {
     startListening();
   }
 }
@@ -1573,7 +1595,10 @@ function scrollCallToBottom() {
   });
 }
 
+let voiceEndedAt = 0;
 function setSpeaking(on) {
+  if (on !== state.speaking) debugLog(on ? "voice playing" : "voice ended");
+  if (state.speaking && !on) voiceEndedAt = Date.now();
   state.speaking = on;
   updateCallState();
 }
